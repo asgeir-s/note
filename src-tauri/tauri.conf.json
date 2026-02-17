@@ -24,14 +24,7 @@
   },
   "plugins": {
     "shell": {
-      "open": true,
-      "scope": [
-        {
-          "name": "qmd",
-          "cmd": "qmd",
-          "args": true
-        }
-      ]
+      "open": true
     }
   }
 }

@@ -120,15 +120,10 @@ export default function App() {
   const handleOpenNote = useCallback(
     async (noteId: string) => {
       try {
-        // If editing an existing note, open the linked note in the side panel
-        if (editingId) {
+        // If editing or composing, open the linked note in the side panel
+        if (editingId || content.trim()) {
           setSidePanelNoteId(noteId);
           return;
-        }
-
-        // If currently typing new content, auto-save it first
-        if (content.trim() && !editingId) {
-          await saveNote(null, content, tags);
         }
 
         const note = await getNote(noteId);
@@ -205,7 +200,7 @@ export default function App() {
             onChange={setTags}
           />
         )}
-        {editingId && (
+        {(editingId || isTyping) && (
           <div className="editing-indicator" role="status" aria-live="polite">Editing</div>
         )}
         <Editor
