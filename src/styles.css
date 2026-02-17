@@ -1161,3 +1161,27 @@ body {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   }
 }
+
+/* Tool status indicator */
+.tool-status-indicator {
+  position: fixed;
+  bottom: 12px;
+  right: 140px;
+  z-index: 100;
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+.tool-status-indicator:hover {
+  opacity: 1;
+}
+
+.tool-missing {
+  color: var(--accent, #c25);
+  background: var(--bg, #fff);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+}

@@ -251,6 +251,19 @@ export async function dismissGitSetup(): Promise<void> {
   }
 }
 
+export interface ToolStatus {
+  git: boolean;
+  qmd: boolean;
+  ollama: boolean;
+}
+
+export async function checkTools(): Promise<ToolStatus> {
+  if (isTauri()) {
+    return invoke<ToolStatus>("check_tools");
+  }
+  return { git: false, qmd: false, ollama: false };
+}
+
 export async function getRelatedNotes(id: string): Promise<NoteMetadata[]> {
   if (isTauri()) {
     return invoke<NoteMetadata[]>("get_related_notes", { id });

@@ -213,6 +213,7 @@ pub fn run() {
             git_sync::set_git_remote,
             git_sync::dismiss_git_setup,
             qmd::get_related_notes,
+            qmd::check_tools,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

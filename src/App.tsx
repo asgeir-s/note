@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir } from "./api";
+import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools } from "./api";
+import type { ToolStatus } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
@@ -57,6 +58,7 @@ export default function App() {
   const deleteWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gPendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
   const spacePendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
@@ -140,6 +142,14 @@ export default function App() {
       }
 
       await checkGitSetup();
+
+      // Check external tool availability.
+      try {
+        const status = await checkTools();
+        setToolStatus(status);
+      } catch {
+        // Not in Tauri
+      }
     };
     void init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -905,6 +915,14 @@ export default function App() {
           }}
           onClose={() => setSearchPaletteOpen(false)}
         />,
+        document.body,
+      )}
+      {toolStatus && (!toolStatus.git || !toolStatus.qmd || !toolStatus.ollama) && createPortal(
+        <div className="tool-status-indicator">
+          {!toolStatus.git && <span className="tool-missing">git not found</span>}
+          {!toolStatus.qmd && <span className="tool-missing">qmd not found</span>}
+          {!toolStatus.ollama && <span className="tool-missing">ollama not found</span>}
+        </div>,
         document.body,
       )}
       {showHotkeys && createPortal(

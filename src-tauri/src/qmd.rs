@@ -94,8 +94,56 @@ fn save_cache(path: &Path, cache: &RelatedCache) {
     }
 }
 
+/// Build an enriched PATH so that bundled macOS apps can find tools like qmd and ollama
+/// which are typically installed in locations not in the default app PATH.
+fn enriched_path() -> String {
+    let base = std::env::var("PATH").unwrap_or_default();
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
+    let mut extra: Vec<String> = vec![
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+        format!("{home}/.local/bin"),
+        format!("{home}/.volta/bin"),
+        "/usr/bin".into(),
+        "/bin".into(),
+    ];
+    // nvm: find the active node version directory
+    let nvm_dir = format!("{home}/.nvm/versions/node");
+    if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
+        // Pick the most recently modified node version
+        let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+        for entry in entries.flatten() {
+            let bin = entry.path().join("bin");
+            if bin.is_dir() {
+                if let Ok(meta) = entry.metadata() {
+                    let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                    if best.as_ref().map_or(true, |(t, _)| modified > *t) {
+                        best = Some((modified, bin));
+                    }
+                }
+            }
+        }
+        if let Some((_, bin)) = best {
+            extra.insert(0, bin.to_string_lossy().to_string());
+        }
+    }
+    let mut parts: Vec<&str> = base.split(':').collect();
+    for p in &extra {
+        if !parts.contains(&p.as_str()) {
+            parts.push(p);
+        }
+    }
+    parts.join(":")
+}
+
+fn cmd(program: &str) -> Command {
+    let mut c = Command::new(program);
+    c.env("PATH", enriched_path());
+    c
+}
+
 async fn qmd_available() -> bool {
-    Command::new("qmd")
+    cmd("qmd")
         .arg("--version")
         .output()
         .await
@@ -104,7 +152,7 @@ async fn qmd_available() -> bool {
 }
 
 async fn qmd(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("qmd")
+    let output = cmd("qmd")
         .args(args)
         .current_dir(dir)
         .output()
@@ -369,12 +417,12 @@ const OLLAMA_MODEL: &str = "qwen2.5:1.5b";
 
 async fn ollama_available() -> bool {
     // Check if ollama binary exists.
-    if Command::new("ollama").arg("--version").output().await.is_err() {
+    if cmd("ollama").arg("--version").output().await.is_err() {
         return false;
     }
 
     // Check if model is available (also tests if server is running).
-    if let Ok(o) = Command::new("ollama").args(["show", OLLAMA_MODEL]).output().await {
+    if let Ok(o) = cmd("ollama").args(["show", OLLAMA_MODEL]).output().await {
         if o.status.success() {
             return true;
         }
@@ -382,11 +430,11 @@ async fn ollama_available() -> bool {
         let stderr = String::from_utf8_lossy(&o.stderr);
         if stderr.contains("could not connect") {
             eprintln!("qmd: starting ollama serve...");
-            let _ = Command::new("ollama").arg("serve").spawn();
+            let _ = cmd("ollama").arg("serve").spawn();
             // Give it a moment to start.
             tokio::time::sleep(Duration::from_secs(2)).await;
             // Retry.
-            return Command::new("ollama")
+            return cmd("ollama")
                 .args(["show", OLLAMA_MODEL])
                 .output()
                 .await
@@ -405,7 +453,7 @@ async fn ollama_extract_keywords(text: &str) -> Option<String> {
         "What is this text about? Reply with exactly 5 topic words separated by commas. No explanation, no formatting.\n\n{}",
         text
     );
-    let output = Command::new("ollama")
+    let output = cmd("ollama")
         .args(["run", OLLAMA_MODEL, &prompt])
         .output()
         .await
@@ -636,4 +684,28 @@ pub async fn get_related_notes(
         }
     }
     Ok(results)
+}
+
+#[derive(Clone, Serialize)]
+pub struct ToolStatus {
+    pub git: bool,
+    pub qmd: bool,
+    pub ollama: bool,
+}
+
+#[tauri::command]
+pub async fn check_tools() -> ToolStatus {
+    let git = Command::new("git")
+        .arg("--version")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let qmd = qmd_available().await;
+    let ollama = ollama_available().await;
+
+    eprintln!("qmd: tool check — git={git}, qmd={qmd}, ollama={ollama}");
+
+    ToolStatus { git, qmd, ollama }
 }
