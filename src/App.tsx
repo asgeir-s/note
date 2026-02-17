@@ -198,6 +198,11 @@ function App() {
     await openNote(note.path);
   }
 
+  async function startEditingSideNote(note: NoteSummary) {
+    await openNote(note.path);
+    setSideNote(null);
+  }
+
   function extractConnectedIds(markdownContent: string) {
     const ids = new Set<string>();
     const linkPattern = /\[\[note:([0-9a-fA-F-]{36})\]\]/g;
@@ -415,7 +420,7 @@ function App() {
           <aside className="side-view">
             <div className="side-head">
               <strong>{sideNote.note.title}</strong>
-              <button type="button" onClick={() => void openNote(sideNote.note.path).then(() => setSideNote(null))}>
+              <button type="button" onClick={() => void startEditingSideNote(sideNote.note)}>
                 Start editing
               </button>
             </div>
