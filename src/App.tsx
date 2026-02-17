@@ -408,13 +408,13 @@ export default function App() {
         setActivePanelIndex(activePanelIndex + 1);
         return;
       }
-      // Cmd/Ctrl+/
-      if ((e.key === "/" || e.key === "?") && (e.metaKey || e.ctrlKey)) {
+      // Ctrl+Cmd + + — show shortcuts (requires both modifiers)
+      if (e.key === "+" && e.metaKey && e.ctrlKey) {
         e.preventDefault();
         setShowHotkeys(true);
         return;
       }
-      // Cmd+= or Cmd++ — zoom in
+      // Cmd/Ctrl + = or + — zoom in
       if ((e.key === "=" || e.key === "+") && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setZoom((z) => Math.min(200, z + 10));
@@ -760,7 +760,7 @@ export default function App() {
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>+</kbd><span>Zoom in</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>-</kbd><span>Zoom out</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>0</kbd><span>Reset zoom</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>/</kbd><span>Show shortcuts</span></div>
+              <div className="hotkey-row"><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
             </div>
           </div>
         </div>,

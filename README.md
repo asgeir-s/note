@@ -88,7 +88,7 @@ Notes are stored as flat files in `~/dump/` (configurable).
 | `Escape`    | Clear textarea, discard content |
 | `Cmd/Ctrl+T` | Toggle tag input               |
 | `Cmd/Ctrl+Click` | Open note in new panel      |
-| `Cmd/Ctrl+/` | Show shortcut list             |
+| `Ctrl+Cmd++` | Show shortcut list             |
 
 ## Slash Commands
 
