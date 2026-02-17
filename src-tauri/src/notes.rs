@@ -1,5 +1,6 @@
-use chrono::{Local, DateTime};
+use chrono::{Local, DateTime, TimeZone};
 use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value};
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
@@ -62,6 +63,25 @@ fn parse_frontmatter(content: &str) -> (Option<Frontmatter>, String) {
     }
 }
 
+/// Parse frontmatter as a raw serde_yaml::Mapping, preserving all fields
+fn parse_raw_yaml(content: &str) -> (Option<Mapping>, String) {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return (None, content.to_string());
+    }
+
+    let after_first = &trimmed[3..];
+    if let Some(end_pos) = after_first.find("\n---") {
+        let yaml_str = &after_first[..end_pos];
+        let body = &after_first[end_pos + 4..];
+        let body = body.strip_prefix('\n').unwrap_or(body);
+        let mapping: Option<Mapping> = serde_yaml::from_str(yaml_str).ok();
+        (mapping, body.to_string())
+    } else {
+        (None, content.to_string())
+    }
+}
+
 /// Extract title from markdown body (first # heading or first line)
 fn extract_title(body: &str) -> String {
     for line in body.lines() {
@@ -103,25 +123,52 @@ fn slugify(title: &str) -> String {
     }
 }
 
-/// Build frontmatter string
-fn build_frontmatter(id: &str, created: &str, modified: &str, tags: &[String], starred: bool) -> String {
-    let mut fm = format!("---\nid: {}\ncreated: {}\nmodified: {}\n", id, created, modified);
+/// Build frontmatter string, merging any extra fields from a raw YAML mapping
+fn build_frontmatter(
+    id: &str,
+    created: &str,
+    modified: &str,
+    tags: &[String],
+    starred: bool,
+    extra: Option<&Mapping>,
+) -> String {
+    let mut map = Mapping::new();
+    map.insert(
+        Value::String("id".into()),
+        Value::String(id.into()),
+    );
+    map.insert(
+        Value::String("created".into()),
+        Value::String(created.into()),
+    );
+    map.insert(
+        Value::String("modified".into()),
+        Value::String(modified.into()),
+    );
     if !tags.is_empty() {
-        fm.push_str("tags: [");
-        fm.push_str(
-            &tags
-                .iter()
-                .map(|t| t.as_str())
-                .collect::<Vec<&str>>()
-                .join(", "),
-        );
-        fm.push_str("]\n");
+        let seq: Vec<Value> = tags.iter().map(|t| Value::String(t.clone())).collect();
+        map.insert(Value::String("tags".into()), Value::Sequence(seq));
     }
     if starred {
-        fm.push_str("starred: true\n");
+        map.insert(Value::String("starred".into()), Value::Bool(true));
     }
-    fm.push_str("---\n");
-    fm
+
+    // Merge extra fields (skip known keys)
+    if let Some(extra) = extra {
+        const KNOWN: &[&str] = &["id", "created", "modified", "tags", "starred"];
+        for (key, value) in extra {
+            if let Value::String(k) = key {
+                if !KNOWN.contains(&k.as_str()) {
+                    map.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
+    let yaml_str = serde_yaml::to_string(&map).unwrap_or_default();
+    // serde_yaml::to_string may prepend "---\n"; strip it since we add our own
+    let yaml_body = yaml_str.strip_prefix("---\n").unwrap_or(&yaml_str);
+    format!("---\n{}---\n", yaml_body)
 }
 
 /// Save a note. If id is Some, update existing; otherwise create new.
@@ -137,20 +184,29 @@ pub fn save_note(
     let created: String;
     let starred: bool;
     let file_path: PathBuf;
+    let extra: Option<Mapping>;
 
     let title = extract_title(content);
 
     if let Some(existing_id) = id {
         // Update existing note
         note_id = existing_id.clone();
-        // Find existing metadata to preserve created date and starred
         if let Some(existing) = index.notes.get(&existing_id) {
             created = existing.created.clone();
             starred = existing.starred;
             file_path = Path::new(notes_dir).join(&existing.path);
+            // Read existing file to preserve extra frontmatter fields
+            extra = if file_path.exists() {
+                let raw = fs::read_to_string(&file_path).unwrap_or_default();
+                let (mapping, _) = parse_raw_yaml(&raw);
+                mapping
+            } else {
+                None
+            };
         } else {
             created = now.to_rfc3339();
             starred = false;
+            extra = None;
             let timestamp = now.format("%Y%m%d%H%M%S").to_string();
             let slug = slugify(&title);
             let filename = format!("{}-{}.md", timestamp, slug);
@@ -161,6 +217,7 @@ pub fn save_note(
         note_id = Uuid::new_v4().to_string();
         created = now.to_rfc3339();
         starred = false;
+        extra = None;
         let timestamp = now.format("%Y%m%d%H%M%S").to_string();
         let slug = slugify(&title);
         let filename = format!("{}-{}.md", timestamp, slug);
@@ -168,7 +225,7 @@ pub fn save_note(
     }
 
     let modified = now.to_rfc3339();
-    let frontmatter = build_frontmatter(&note_id, &created, &modified, tags, starred);
+    let frontmatter = build_frontmatter(&note_id, &created, &modified, tags, starred, extra.as_ref());
     let full_content = format!("{}{}", frontmatter, content);
 
     fs::write(&file_path, &full_content)?;
@@ -211,12 +268,14 @@ pub fn toggle_star(
 
     let new_starred = !meta.starred;
 
-    // Read the file and rewrite frontmatter
+    // Read the file, preserving extra frontmatter fields
     let file_path = Path::new(notes_dir).join(&meta.path);
     let raw = fs::read_to_string(&file_path)?;
-    let (_fm, body) = parse_frontmatter(&raw);
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
 
-    let frontmatter = build_frontmatter(&meta.id, &meta.created, &meta.modified, &meta.tags, new_starred);
+    let frontmatter = build_frontmatter(
+        &meta.id, &meta.created, &meta.modified, &meta.tags, new_starred, raw_yaml.as_ref(),
+    );
     let full_content = format!("{}{}", frontmatter, body);
     fs::write(&file_path, &full_content)?;
 
@@ -410,6 +469,202 @@ pub fn get_all_tags(index: &NoteIndex) -> Vec<String> {
     tags.into_iter().collect()
 }
 
+/// Extract Notion-style inline metadata from body text after the title heading.
+/// Returns (extra_fields, cleaned_body) where metadata lines are removed from body.
+fn extract_notion_metadata(body: &str) -> (Mapping, String) {
+    let mut extra = Mapping::new();
+    let lines: Vec<&str> = body.lines().collect();
+    let mut cleaned_lines: Vec<&str> = Vec::new();
+    let mut i = 0;
+    let mut title_text: Option<String> = None;
+
+    // Find the first # heading (title)
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.starts_with("# ") {
+            title_text = Some(trimmed[2..].trim().to_string());
+            cleaned_lines.push(lines[i]);
+            i += 1;
+            break;
+        }
+        cleaned_lines.push(lines[i]);
+        i += 1;
+    }
+
+    // After title, consume metadata lines (key: value) and empty lines
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        // Skip duplicate title heading (Notion repeats the title)
+        if let Some(ref title) = title_text {
+            if trimmed.starts_with("# ") && trimmed[2..].trim() == title.as_str() {
+                i += 1;
+                continue;
+            }
+        }
+
+        // Check for key: value pattern
+        if let Some(colon_pos) = trimmed.find(": ") {
+            let key = &trimmed[..colon_pos];
+            let value = &trimmed[colon_pos + 2..];
+
+            // Validate: key should be short, alphanumeric/spaces/dashes
+            if !key.is_empty()
+                && key.len() < 30
+                && key
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == ' ' || c == '-')
+                && !key.contains("  ")
+            {
+                let normalized_key = key.to_lowercase().replace(' ', "_").replace('-', "_");
+                extra.insert(
+                    Value::String(normalized_key),
+                    Value::String(value.to_string()),
+                );
+                i += 1;
+                continue;
+            }
+        }
+
+        // Not metadata — stop consuming
+        break;
+    }
+
+    // Add remaining lines
+    while i < lines.len() {
+        cleaned_lines.push(lines[i]);
+        i += 1;
+    }
+
+    (extra, cleaned_lines.join("\n"))
+}
+
+/// Parse natural-language dates like "January 12, 2026" into RFC3339.
+fn parse_natural_date(s: &str) -> Option<String> {
+    const MONTHS: &[(&str, u32)] = &[
+        ("january", 1),
+        ("february", 2),
+        ("march", 3),
+        ("april", 4),
+        ("may", 5),
+        ("june", 6),
+        ("july", 7),
+        ("august", 8),
+        ("september", 9),
+        ("october", 10),
+        ("november", 11),
+        ("december", 12),
+    ];
+
+    let lower = s.trim().to_lowercase();
+
+    for (month_name, month_num) in MONTHS {
+        if lower.starts_with(month_name) {
+            let rest = lower[month_name.len()..].trim();
+            let parts: Vec<&str> = rest
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|p| !p.is_empty())
+                .collect();
+            if parts.len() == 2 {
+                if let (Ok(day), Ok(year)) = (parts[0].parse::<u32>(), parts[1].parse::<i32>()) {
+                    let date = chrono::NaiveDate::from_ymd_opt(year, *month_num, day)?;
+                    let datetime = date.and_hms_opt(0, 0, 0)?;
+                    let local = Local.from_local_datetime(&datetime).single()?;
+                    return Some(local.to_rfc3339());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Import an external markdown file into the notes directory.
+/// Handles both YAML frontmatter files and Notion-style inline metadata.
+pub fn import_markdown_file(
+    notes_dir: &str,
+    source_path: &str,
+    index: &mut NoteIndex,
+) -> io::Result<NoteMetadata> {
+    let raw = fs::read_to_string(source_path)?;
+    let now: DateTime<Local> = Local::now();
+
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+
+    let (extra, body) = if let Some(yaml) = raw_yaml {
+        // File has YAML frontmatter — preserve all fields
+        (yaml, body)
+    } else {
+        // Check for Notion-style inline metadata
+        let (notion_meta, cleaned_body) = extract_notion_metadata(&body);
+        (notion_meta, cleaned_body)
+    };
+
+    // Always generate a new UUID to avoid ID collisions
+    let note_id = Uuid::new_v4().to_string();
+
+    // Use date from metadata if available
+    let created = extra
+        .get(Value::String("date".into()))
+        .and_then(|v| v.as_str())
+        .and_then(parse_natural_date)
+        .or_else(|| {
+            extra
+                .get(Value::String("created".into()))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| now.to_rfc3339());
+
+    let modified = now.to_rfc3339();
+    let title = extract_title(&body);
+    let tags: Vec<String> = extra
+        .get(Value::String("tags".into()))
+        .and_then(|v| match v {
+            Value::Sequence(seq) => Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let starred = extra
+        .get(Value::String("starred".into()))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let frontmatter = build_frontmatter(&note_id, &created, &modified, &tags, starred, Some(&extra));
+    let full_content = format!("{}{}", frontmatter, body);
+
+    let timestamp = now.format("%Y%m%d%H%M%S").to_string();
+    let slug = slugify(&title);
+    let filename = format!("{}-{}.md", timestamp, slug);
+    let file_path = Path::new(notes_dir).join(&filename);
+
+    fs::write(&file_path, &full_content)?;
+
+    let meta = NoteMetadata {
+        id: note_id.clone(),
+        path: filename,
+        title,
+        created,
+        modified,
+        tags,
+        starred,
+    };
+
+    index.notes.insert(note_id, meta.clone());
+    save_index(notes_dir, index)?;
+
+    Ok(meta)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,7 +728,7 @@ mod tests {
         save_note(&dir, None, "# Second", &[], &mut index).unwrap();
         save_note(&dir, None, "# Third", &[], &mut index).unwrap();
 
-        let recent = list_recent_notes(&index, 2);
+        let recent = list_recent_notes(&index, 2, "created");
         assert_eq!(recent.len(), 2);
 
         fs::remove_dir_all(&dir).ok();

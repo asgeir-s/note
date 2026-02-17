@@ -90,7 +90,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           if (pushHistory) {
             historyRef.current.push(loadedNoteIdRef.current);
           }
-          setRelatedNotes([]);
+          if (noteId !== loadedNoteIdRef.current) {
+            setRelatedNotes([]);
+          }
           const note = await getNote(noteId);
           setContent(note.content);
           setLoadedNoteId(note.id);

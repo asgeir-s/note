@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex } from "./api";
+import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
@@ -36,6 +36,8 @@ export default function App() {
     const saved = localStorage.getItem("note-zoom");
     return saved ? Number(saved) : 100;
   });
+  const [dropZoneVisible, setDropZoneVisible] = useState(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
@@ -427,6 +429,92 @@ export default function App() {
     };
   }, [handleKeyDown, handleKeyUp]);
 
+  // Drag-and-drop import — use a ref so the listener doesn't need to re-subscribe
+  const handleImportRef = useRef<(paths: string[]) => Promise<void>>(null!);
+  handleImportRef.current = useCallback(
+    async (paths: string[]) => {
+      setImportStatus(
+        `Importing ${paths.length} file${paths.length > 1 ? "s" : ""}...`,
+      );
+      let firstMeta: NoteMetadata | null = null;
+      let count = 0;
+
+      for (const path of paths) {
+        try {
+          const meta = await importMarkdownFile(path);
+          if (!firstMeta) firstMeta = meta;
+          count++;
+        } catch (e) {
+          console.error("Failed to import", path, e);
+        }
+      }
+
+      if (count > 0) {
+        await refreshSharedState();
+        setImportStatus(`Imported ${count} note${count > 1 ? "s" : ""}`);
+        // Open the note only when importing a single file
+        if (count === 1 && firstMeta) {
+          const activePanel = panelRefs.current.get(
+            panels[activePanelIndex]?.id,
+          );
+          if (activePanel) {
+            activePanel.loadNote(firstMeta.id);
+          }
+        }
+      } else {
+        setImportStatus("No files imported");
+      }
+
+      setTimeout(() => setImportStatus(null), 3000);
+    },
+    [panels, activePanelIndex, refreshSharedState],
+  );
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    const setup = async () => {
+      try {
+        const { getCurrentWebview } = await import(
+          "@tauri-apps/api/webview"
+        );
+        const webview = getCurrentWebview();
+        const fn = await webview.onDragDropEvent((event) => {
+          if (cancelled) return;
+          if (event.payload.type === "enter") {
+            const paths: string[] = (event.payload as any).paths ?? [];
+            if (paths.some((p) => p.endsWith(".md"))) {
+              setDropZoneVisible(true);
+            }
+          } else if (event.payload.type === "leave") {
+            setDropZoneVisible(false);
+          } else if (event.payload.type === "drop") {
+            setDropZoneVisible(false);
+            const paths: string[] = (event.payload as any).paths ?? [];
+            const mdPaths = paths.filter((p: string) => p.endsWith(".md"));
+            if (mdPaths.length > 0) {
+              handleImportRef.current(mdPaths);
+            }
+          }
+        });
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      } catch {
+        // Not in Tauri environment
+      }
+    };
+
+    setup();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Drag splitter handling
   const handleDrag = useCallback(
     (index: number, deltaX: number) => {
@@ -493,6 +581,16 @@ export default function App() {
       ))}
     </div>
     <ThemePicker themeId={themeId} onThemeChange={handleThemeChange} />
+      {dropZoneVisible && createPortal(
+        <div className="drop-zone-overlay">
+          <div className="drop-zone-content">Drop .md files to import</div>
+        </div>,
+        document.body,
+      )}
+      {importStatus && createPortal(
+        <div className="import-toast">{importStatus}</div>,
+        document.body,
+      )}
       {showHotkeys && createPortal(
         <div className="hotkeys-overlay">
           <div className="hotkeys-panel">

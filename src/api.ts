@@ -141,6 +141,15 @@ export async function toggleStar(id: string): Promise<NoteMetadata> {
   return note.meta;
 }
 
+export async function importMarkdownFile(
+  sourcePath: string,
+): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("import_markdown_file", { sourcePath });
+  }
+  throw new Error("Import is only available in the desktop app");
+}
+
 export async function rebuildIndex(): Promise<void> {
   if (isTauri()) {
     return invoke<void>("rebuild_index");

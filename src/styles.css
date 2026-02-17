@@ -612,6 +612,51 @@ body {
   background: var(--accent);
 }
 
+/* Drop zone overlay */
+.drop-zone-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  pointer-events: none;
+}
+
+.drop-zone-content {
+  padding: 24px 48px;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+/* Import toast */
+.import-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 250;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .import-toast {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+}
+
 /* Hotkeys overlay */
 .hotkeys-overlay {
   position: fixed;
