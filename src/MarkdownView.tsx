@@ -8,7 +8,10 @@ interface MarkdownViewProps {
 }
 
 export function MarkdownView({ content, onEdit }: MarkdownViewProps) {
-  const html = useMemo(() => marked.parse(content, { breaks: true }) as string, [content]);
+  const html = useMemo(
+    () => marked.parse(content, { breaks: true }) as string,
+    [content],
+  );
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {

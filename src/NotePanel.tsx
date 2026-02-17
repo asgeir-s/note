@@ -13,6 +13,7 @@ import { TagInput } from "./TagInput";
 import {
   saveNote,
   getNote,
+  deleteNote,
   searchNotes,
   toggleStar,
 } from "./api";
@@ -36,6 +37,7 @@ export interface PanelHandle {
   openSelectedNote: (metaKey: boolean) => void;
   getHighlightedNoteId: () => string | null;
   toggleStar: () => Promise<void>;
+  deleteNote: () => Promise<void>;
 }
 
 interface NotePanelProps {
@@ -242,6 +244,16 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             console.error("Failed to toggle star:", e);
           }
         },
+        deleteNote: async () => {
+          if (!loadedNoteId) return;
+          try {
+            await deleteNote(loadedNoteId);
+            clearPanel();
+            await onSaved();
+          } catch (e) {
+            console.error("Failed to delete note:", e);
+          }
+        },
       }),
       [loadNote, loadNoteInternal, clearPanel, handleSave, userModified, loadedNoteId, content, tags, onSaved, isTyping, relatedNotes, recentNotes, highlightIndex, onNoteClick],
     );
@@ -338,11 +350,10 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             </div>
           )}
         </div>
-        {editing ? (
-          <Editor ref={editorRef} content={content} onChange={handleChange} themeId={themeId} vimEnabled={vimEnabled} onVimToggle={onVimToggle} />
-        ) : (
-          <MarkdownView content={content} onEdit={handleEdit} />
-        )}
+        <div style={{ display: editing ? undefined : 'none' }}>
+          <Editor ref={editorRef} content={content} onChange={handleChange} onSave={handleSave} themeId={themeId} vimEnabled={vimEnabled} onVimToggle={onVimToggle} />
+        </div>
+        {!editing && <MarkdownView content={content} onEdit={handleEdit} />}
         <div className="save-hint">
           {/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
             ? <><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts</>

@@ -72,6 +72,22 @@ fn save_note(
 }
 
 #[tauri::command]
+fn delete_note(state: State<AppState>, id: String) -> Result<(), String> {
+    let path = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        let path = index.notes.get(&id).map(|m| m.path.clone());
+        notes::delete_note(&dir, &id, &mut index).map_err(|e| e.to_string())?;
+        path
+    };
+    if let Some(path) = path {
+        let git = state.git.lock().map_err(|e| e.to_string())?;
+        git.notify_change(&path, "deleted", false);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn get_note(state: State<AppState>, id: String) -> Result<notes::NoteContent, String> {
     let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
     let index = state.index.lock().map_err(|e| e.to_string())?;
@@ -164,6 +180,7 @@ pub fn run() {
             get_notes_dir,
             set_notes_dir,
             save_note,
+            delete_note,
             get_note,
             list_recent_notes,
             search_notes,

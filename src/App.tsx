@@ -52,6 +52,9 @@ export default function App() {
   const [gitError, setGitError] = useState<string | null>(null);
   const [closeWarningIndex, setCloseWarningIndex] = useState<number | null>(null);
   const closeWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [deleteWarning, setDeleteWarning] = useState(false);
+  const deleteWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gPendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
@@ -403,6 +406,25 @@ export default function App() {
         activePanel.edit();
         return;
       }
+      // Cmd+D — delete current note (with confirmation)
+      if (e.key === "d" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (!activePanel.getLoadedNoteId()) return;
+        if (deleteWarning) {
+          if (deleteWarningTimeout.current) clearTimeout(deleteWarningTimeout.current);
+          setDeleteWarning(false);
+          activePanel.deleteNote().then(() => {
+            if (panels.length > 1) {
+              closePanel(activePanelIndex);
+            }
+          });
+        } else {
+          if (deleteWarningTimeout.current) clearTimeout(deleteWarningTimeout.current);
+          setDeleteWarning(true);
+          deleteWarningTimeout.current = setTimeout(() => setDeleteWarning(false), 3000);
+        }
+        return;
+      }
       // Cmd+H — focus left panel
       if (e.key === "h" && (e.metaKey || e.ctrlKey) && activePanelIndex > 0) {
         e.preventDefault();
@@ -489,6 +511,32 @@ export default function App() {
           activePanel.openSelectedNote(false);
           return;
         }
+        if (e.key === "G" && e.shiftKey) {
+          e.preventDefault();
+          const panelEl = document.querySelectorAll(".panel-container")[activePanelIndex];
+          if (panelEl) panelEl.scrollTo({ top: panelEl.scrollHeight });
+          if (gPendingTimeout.current) {
+            clearTimeout(gPendingTimeout.current);
+            gPendingTimeout.current = null;
+          }
+          return;
+        }
+        if (e.key === "g" && !e.shiftKey) {
+          e.preventDefault();
+          if (gPendingTimeout.current) {
+            // Second g press — scroll to top
+            clearTimeout(gPendingTimeout.current);
+            gPendingTimeout.current = null;
+            const panelEl = document.querySelectorAll(".panel-container")[activePanelIndex];
+            if (panelEl) panelEl.scrollTo({ top: 0 });
+          } else {
+            // First g press — wait for possible second press
+            gPendingTimeout.current = setTimeout(() => {
+              gPendingTimeout.current = null;
+            }, 300);
+          }
+          return;
+        }
         if (e.key === " ") {
           e.preventDefault();
           const noteId = activePanel.getHighlightedNoteId();
@@ -501,7 +549,7 @@ export default function App() {
         }
       }
     },
-    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex],
+    [panels, activePanelIndex, closePanel, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning],
   );
 
   const handleKeyUp = useCallback(
@@ -771,6 +819,10 @@ export default function App() {
         <div className="close-warning-toast">Unsaved changes — press <kbd>{primaryModifier}</kbd> <kbd>W</kbd> again to close</div>,
         document.body,
       )}
+      {deleteWarning && createPortal(
+        <div className="delete-warning-toast">Delete note? Press <kbd>{primaryModifier}</kbd> <kbd>D</kbd> again to confirm</div>,
+        document.body,
+      )}
       {gitError && createPortal(
         <div className="git-error-toast">{gitError}</div>,
         document.body,
@@ -784,6 +836,7 @@ export default function App() {
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>N</kbd><span>New note</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>E</kbd><span>Edit note</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>S</kbd><span>Star note</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>D</kbd><span>Delete note</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>T</kbd><span>Toggle tags</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>⌫</kbd><span>Go back</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>H</kbd><span>Focus left panel</span></div>

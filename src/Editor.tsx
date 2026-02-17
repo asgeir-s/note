@@ -6,7 +6,7 @@ import {
   useImperativeHandle,
   useState,
 } from "react";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState, Compartment, Transaction } from "@codemirror/state";
 import { EditorView, drawSelection, keymap, placeholder, ViewUpdate } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
@@ -16,6 +16,15 @@ import { tags } from "@lezer/highlight";
 import { vim, Vim } from "@replit/codemirror-vim";
 
 Vim.map("fd", "<Esc>", "insert");
+Vim.unmap("<Space>", "normal");
+Vim.map("<Space>fs", ":w<CR>", "normal");
+
+const saveCallbacks = new WeakMap<EditorView, () => void>();
+Vim.defineEx("w", "w", (cm: any) => {
+  const view = cm.cm6 as EditorView;
+  saveCallbacks.get(view)?.();
+});
+
 import { SlashPalette, slashCommands } from "./SlashPalette";
 import { themes } from "./themes";
 import { openUrl } from "./api";
@@ -23,6 +32,7 @@ import { openUrl } from "./api";
 interface EditorProps {
   content: string;
   onChange: (value: string) => void;
+  onSave: () => void;
   themeId: string;
   vimEnabled: boolean;
   onVimToggle: () => void;
@@ -118,10 +128,11 @@ function findLinkUrl(view: EditorView, clientX: number, clientY: number): string
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, themeId, vimEnabled, onVimToggle }, ref) => {
+  ({ content, onChange, onSave, themeId, vimEnabled, onVimToggle }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
+    const onSaveRef = useRef(onSave);
     const isSettingContent = useRef(false);
     const highlightCompartment = useRef(new Compartment());
     const themeCompartment = useRef(new Compartment());
@@ -136,6 +147,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
     }>({ visible: false, x: 0, y: 0, filter: "", lineStart: 0 });
 
     onChangeRef.current = onChange;
+    onSaveRef.current = onSave;
 
     useImperativeHandle(ref, () => ({
       focus: () => viewRef.current?.focus(),
@@ -149,6 +161,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
               to: viewRef.current.state.doc.length,
               insert: "",
             },
+            annotations: Transaction.addToHistory.of(false),
           });
           isSettingContent.current = false;
         }
@@ -236,6 +249,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       });
 
       viewRef.current = view;
+      saveCallbacks.set(view, () => onSaveRef.current());
 
       // Cmd+Click to open links
       const handleClick = (event: MouseEvent) => {
@@ -301,6 +315,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
         isSettingContent.current = true;
         view.dispatch({
           changes: { from: 0, to: currentContent.length, insert: content },
+          annotations: Transaction.addToHistory.of(false),
         });
         isSettingContent.current = false;
       }

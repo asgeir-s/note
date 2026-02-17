@@ -63,6 +63,13 @@ export async function saveNote(
   return meta;
 }
 
+export async function deleteNote(id: string): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("delete_note", { id });
+  }
+  memoryNotes.delete(id);
+}
+
 export async function getNote(id: string): Promise<NoteContent> {
   if (isTauri()) {
     return invoke<NoteContent>("get_note", { id });

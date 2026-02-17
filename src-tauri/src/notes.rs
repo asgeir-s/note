@@ -290,6 +290,29 @@ pub fn toggle_star(
     Ok(updated)
 }
 
+/// Delete a note by ID
+pub fn delete_note(
+    notes_dir: &str,
+    id: &str,
+    index: &mut NoteIndex,
+) -> io::Result<()> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
+        .clone();
+
+    let file_path = Path::new(notes_dir).join(&meta.path);
+    if file_path.exists() {
+        fs::remove_file(&file_path)?;
+    }
+
+    index.notes.remove(id);
+    save_index(notes_dir, index)?;
+
+    Ok(())
+}
+
 /// Get a note by ID
 pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<NoteContent> {
     let meta = index
