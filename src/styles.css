@@ -714,3 +714,92 @@ body {
   color: var(--text);
   line-height: 1.4;
 }
+
+/* Git setup banner */
+.git-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.git-banner span {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.git-banner-input {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  min-width: 0;
+}
+
+.git-banner-input:focus {
+  border-color: var(--accent);
+}
+
+.git-banner-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-family: var(--font);
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.git-banner-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.git-banner-btn.connect {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.git-banner-btn.connect:hover {
+  opacity: 0.9;
+}
+
+/* Git error toast */
+.git-error-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 250;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #d44;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, #d44 30%, var(--border));
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  white-space: nowrap;
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-color-scheme: dark) {
+  .git-error-toast {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+}

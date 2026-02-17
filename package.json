@@ -18,6 +18,7 @@
     "@codemirror/view": "^6.36.5",
     "@fsegurai/codemirror-theme-bundle": "^6.3.1",
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/cli": "^2.10.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

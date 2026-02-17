@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile } from "./api";
+import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
@@ -38,6 +38,9 @@ export default function App() {
   });
   const [dropZoneVisible, setDropZoneVisible] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [gitBanner, setGitBanner] = useState(false);
+  const [gitRemoteUrl, setGitRemoteUrl] = useState("");
+  const [gitError, setGitError] = useState<string | null>(null);
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
@@ -77,8 +80,35 @@ export default function App() {
         // Index rebuild may fail in web-only mode
       }
       await refreshSharedState();
+      // Check if git remote is configured
+      try {
+        const remote = await getGitRemote();
+        if (remote === null) {
+          setGitBanner(true);
+        }
+      } catch {
+        // Not in Tauri or git not available
+      }
     };
     init();
+
+    // Listen for git sync errors
+    let unlistenGitError: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlistenGitError = await listen<string>("git-sync-error", (event) => {
+          setGitError(event.payload);
+          setTimeout(() => setGitError(null), 5000);
+        });
+      } catch {
+        // Not in Tauri
+      }
+    })();
+
+    return () => {
+      unlistenGitError?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -545,8 +575,43 @@ export default function App() {
     dragStartWidths.current = [];
   }, []);
 
+  const handleGitConnect = useCallback(async () => {
+    if (!gitRemoteUrl.trim()) return;
+    try {
+      await setGitRemote(gitRemoteUrl.trim());
+    } catch (e) {
+      console.error("Failed to set git remote:", e);
+    }
+    setGitBanner(false);
+    setGitRemoteUrl("");
+  }, [gitRemoteUrl]);
+
+  const handleGitDismiss = useCallback(async () => {
+    try {
+      await dismissGitSetup();
+    } catch {
+      // ignore
+    }
+    setGitBanner(false);
+  }, []);
+
   return (
     <>
+    {gitBanner && (
+      <div className="git-banner">
+        <span>Set up git sync</span>
+        <input
+          className="git-banner-input"
+          type="text"
+          placeholder="Remote URL (e.g. git@github.com:user/notes.git)"
+          value={gitRemoteUrl}
+          onChange={(e) => setGitRemoteUrl(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleGitConnect(); }}
+        />
+        <button className="git-banner-btn connect" onClick={handleGitConnect}>Connect</button>
+        <button className="git-banner-btn" onClick={handleGitDismiss}>Later</button>
+      </div>
+    )}
     <div className="app-layout" ref={containerRef}>
       {panels.map((panel, index) => (
         <Fragment key={panel.id}>
@@ -589,6 +654,10 @@ export default function App() {
       )}
       {importStatus && createPortal(
         <div className="import-toast">{importStatus}</div>,
+        document.body,
+      )}
+      {gitError && createPortal(
+        <div className="git-error-toast">{gitError}</div>,
         document.body,
       )}
       {showHotkeys && createPortal(

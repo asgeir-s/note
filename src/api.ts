@@ -165,6 +165,25 @@ export async function openUrl(url: string): Promise<void> {
   }
 }
 
+export async function getGitRemote(): Promise<string | null> {
+  if (isTauri()) {
+    return invoke<string | null>("get_git_remote");
+  }
+  return null;
+}
+
+export async function setGitRemote(url: string): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("set_git_remote", { url });
+  }
+}
+
+export async function dismissGitSetup(): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("dismiss_git_setup");
+  }
+}
+
 function extractTitle(content: string): string {
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
