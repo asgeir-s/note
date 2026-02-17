@@ -15,7 +15,7 @@ export const slashCommands: SlashCommand[] = [
   { label: "ol", insert: "1. ", preview: "Numbered list" },
   { label: "code", insert: "```\n\n```", preview: "Code block" },
   { label: "link", insert: "[text](url)", preview: "Link" },
-  { label: "note", insert: "[[note:]]", preview: "Note link" },
+  { label: "note", insert: "[[", preview: "Note link" },
   { label: "divider", insert: "---", preview: "Divider" },
 ];
 

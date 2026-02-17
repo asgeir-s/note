@@ -5,9 +5,10 @@ import { openUrl } from "./api";
 interface MarkdownViewProps {
   content: string;
   onEdit: () => void;
+  onNoteNavigate?: (noteId: string, metaKey: boolean) => void;
 }
 
-export function MarkdownView({ content, onEdit }: MarkdownViewProps) {
+export function MarkdownView({ content, onEdit, onNoteNavigate }: MarkdownViewProps) {
   const html = useMemo(
     () => marked.parse(content, { breaks: true }) as string,
     [content],
@@ -21,7 +22,12 @@ export function MarkdownView({ content, onEdit }: MarkdownViewProps) {
           const href = (target as HTMLAnchorElement).getAttribute("href");
           if (href) {
             e.preventDefault();
-            openUrl(href);
+            if (href.startsWith("note://")) {
+              const uuid = href.slice("note://".length);
+              onNoteNavigate?.(uuid, e.metaKey || e.ctrlKey);
+            } else {
+              openUrl(href);
+            }
           }
           return;
         }
@@ -29,7 +35,7 @@ export function MarkdownView({ content, onEdit }: MarkdownViewProps) {
       }
       onEdit();
     },
-    [onEdit],
+    [onEdit, onNoteNavigate],
   );
 
   return (

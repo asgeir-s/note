@@ -44,6 +44,7 @@ interface NotePanelProps {
   recentNotes: NoteMetadata[];
   allTags: string[];
   onNoteClick: (noteId: string, metaKey: boolean) => void;
+  onNoteNavigate?: (noteId: string, metaKey: boolean) => void;
   onSaved: () => Promise<void>;
   onFocus: () => void;
   initialNoteId?: string;
@@ -61,6 +62,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       recentNotes,
       allTags,
       onNoteClick,
+      onNoteNavigate,
       onSaved,
       onFocus,
       initialNoteId,
@@ -351,9 +353,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           )}
         </div>
         <div style={{ display: editing ? undefined : 'none' }}>
-          <Editor ref={editorRef} content={content} onChange={handleChange} onSave={handleSave} themeId={themeId} vimEnabled={vimEnabled} onVimToggle={onVimToggle} />
+          <Editor ref={editorRef} content={content} onChange={handleChange} onSave={handleSave} themeId={themeId} vimEnabled={vimEnabled} onVimToggle={onVimToggle} onNoteNavigate={onNoteNavigate} recentNotes={recentNotes} />
         </div>
-        {!editing && <MarkdownView content={content} onEdit={handleEdit} />}
+        {!editing && <MarkdownView content={content} onEdit={handleEdit} onNoteNavigate={onNoteNavigate} />}
         <div className="save-hint">
           {/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
             ? <><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts</>

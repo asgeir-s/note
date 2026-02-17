@@ -472,6 +472,7 @@ export default function App() {
       }
       // Tab to leave the editor and enter list navigation mode
       const editorFocused = !!document.activeElement?.closest(".cm-editor");
+      const inputFocused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
       if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && editorFocused) {
         e.preventDefault();
         if (document.activeElement instanceof HTMLElement) {
@@ -487,7 +488,7 @@ export default function App() {
         return;
       }
       // J/K — scroll active panel, ArrowDown/ArrowUp — navigate list (only when not editing and editor not focused)
-      if (!e.metaKey && !e.ctrlKey && !editorFocused) {
+      if (!e.metaKey && !e.ctrlKey && !editorFocused && !inputFocused) {
         if (e.key === "j" || e.key === "k") {
           e.preventDefault();
           const panelEl = document.querySelectorAll(".panel-container")[activePanelIndex];
@@ -788,6 +789,9 @@ export default function App() {
               recentNotes={recentNotes}
               allTags={allTags}
               onNoteClick={(noteId, metaKey) =>
+                handleNoteClick(index, noteId, metaKey)
+              }
+              onNoteNavigate={(noteId, metaKey) =>
                 handleNoteClick(index, noteId, metaKey)
               }
               onSaved={refreshSharedState}

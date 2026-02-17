@@ -26,8 +26,10 @@ Vim.defineEx("w", "w", (cm: any) => {
 });
 
 import { SlashPalette, slashCommands } from "./SlashPalette";
+import { NoteLinkPalette } from "./NoteLinkPalette";
 import { themes } from "./themes";
 import { openUrl } from "./api";
+import type { NoteMetadata } from "./api";
 
 interface EditorProps {
   content: string;
@@ -36,6 +38,8 @@ interface EditorProps {
   themeId: string;
   vimEnabled: boolean;
   onVimToggle: () => void;
+  onNoteNavigate?: (noteId: string, metaKey: boolean) => void;
+  recentNotes?: NoteMetadata[];
 }
 
 export interface EditorHandle {
@@ -128,7 +132,7 @@ function findLinkUrl(view: EditorView, clientX: number, clientY: number): string
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, onSave, themeId, vimEnabled, onVimToggle }, ref) => {
+  ({ content, onChange, onSave, themeId, vimEnabled, onVimToggle, onNoteNavigate, recentNotes }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
@@ -145,6 +149,17 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       filter: string;
       lineStart: number;
     }>({ visible: false, x: 0, y: 0, filter: "", lineStart: 0 });
+
+    const [linkState, setLinkState] = useState<{
+      visible: boolean;
+      x: number;
+      y: number;
+      filter: string;
+      linkStart: number;
+    }>({ visible: false, x: 0, y: 0, filter: "", linkStart: 0 });
+
+    const onNoteNavigateRef = useRef(onNoteNavigate);
+    onNoteNavigateRef.current = onNoteNavigate;
 
     onChangeRef.current = onChange;
     onSaveRef.current = onSave;
@@ -186,6 +201,24 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       [slashState],
     );
 
+    const handleLinkSelect = useCallback(
+      (noteId: string, noteTitle: string) => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        const insert = `[${noteTitle}](note://${noteId})`;
+        const { linkStart } = linkState;
+        const cursor = view.state.selection.main.head;
+        view.dispatch({
+          changes: { from: linkStart, to: cursor, insert },
+          selection: { anchor: linkStart + insert.length },
+        });
+        setLinkState((s) => ({ ...s, visible: false }));
+        view.focus();
+      },
+      [linkState],
+    );
+
     useEffect(() => {
       if (!containerRef.current) return;
 
@@ -223,6 +256,30 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
                 s.visible ? { ...s, visible: false } : s,
               );
             }
+
+            // Check for [[ note link trigger
+            const linkMatch = textBefore.match(/\[\[([^\]]*)$/);
+            if (linkMatch) {
+              const filter = linkMatch[1];
+              const coords = update.view.coordsAtPos(cursor);
+              if (coords) {
+                const editorRect =
+                  containerRef.current?.getBoundingClientRect();
+                if (editorRect) {
+                  setLinkState({
+                    visible: true,
+                    x: coords.left - editorRect.left,
+                    y: coords.bottom - editorRect.top + 4,
+                    filter,
+                    linkStart: line.from + (linkMatch.index ?? 0),
+                  });
+                }
+              }
+            } else {
+              setLinkState((s) =>
+                s.visible ? { ...s, visible: false } : s,
+              );
+            }
           }
         },
       );
@@ -251,6 +308,20 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       viewRef.current = view;
       saveCallbacks.set(view, () => onSaveRef.current());
 
+      // Cmd+hover to show pointer on links
+      const handleMouseMove = (event: MouseEvent) => {
+        if (event.metaKey || event.ctrlKey) {
+          const url = findLinkUrl(view, event.clientX, event.clientY);
+          view.contentDOM.style.cursor = url ? "pointer" : "";
+        } else {
+          if (view.contentDOM.style.cursor) view.contentDOM.style.cursor = "";
+        }
+      };
+
+      const handleKeyChange = () => {
+        if (view.contentDOM.style.cursor) view.contentDOM.style.cursor = "";
+      };
+
       // Cmd+Click to open links
       const handleClick = (event: MouseEvent) => {
         if (!event.metaKey && !event.ctrlKey) return;
@@ -259,14 +330,23 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
         if (url) {
           event.preventDefault();
           event.stopPropagation();
-          openUrl(url);
+          if (url.startsWith("note://")) {
+            const uuid = url.slice("note://".length);
+            onNoteNavigateRef.current?.(uuid, true);
+          } else {
+            openUrl(url);
+          }
         }
       };
 
       view.dom.addEventListener("click", handleClick);
+      view.dom.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("keyup", handleKeyChange);
 
       return () => {
         view.dom.removeEventListener("click", handleClick);
+        view.dom.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("keyup", handleKeyChange);
         view.destroy();
         viewRef.current = null;
       };
@@ -346,6 +426,16 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
             y={slashState.y}
             onSelect={handleSlashSelect}
             onClose={() => setSlashState((s) => ({ ...s, visible: false }))}
+          />
+        )}
+        {linkState.visible && (
+          <NoteLinkPalette
+            x={linkState.x}
+            y={linkState.y}
+            initialFilter={linkState.filter}
+            recentNotes={recentNotes ?? []}
+            onSelect={handleLinkSelect}
+            onClose={() => setLinkState((s) => ({ ...s, visible: false }))}
           />
         )}
       </div>

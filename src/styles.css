@@ -580,6 +580,76 @@ body {
   margin-left: 8px;
 }
 
+/* Note link palette */
+.note-link-palette {
+  position: absolute;
+  z-index: 100;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  min-width: 240px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .note-link-palette {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.note-link-search {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  font-size: 14px;
+  font-family: var(--font);
+  color: var(--text);
+  outline: none;
+  border-radius: 8px 8px 0 0;
+}
+
+.note-link-search::placeholder {
+  color: var(--text-muted);
+}
+
+.note-link-list {
+  padding: 2px 0;
+}
+
+.note-link-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: var(--font);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-link-item:hover,
+.note-link-item.active {
+  background: var(--surface);
+}
+
+.note-link-empty {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 /* Tag input */
 .tag-input-container {
   display: flex;
