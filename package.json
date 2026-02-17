@@ -1,0 +1,37 @@
+{
+  "name": "dump",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "setup-ubuntu": "bash scripts/setup-ubuntu.sh",
+    "install-app": "bash scripts/install-app.sh",
+    "install-app:macos": "bash scripts/install-macos.sh",
+    "install-app:ubuntu": "bash scripts/install-ubuntu.sh"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.8.0",
+    "@codemirror/lang-markdown": "^6.3.2",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/language-data": "^6.5.1",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.5",
+    "@fsegurai/codemirror-theme-bundle": "^6.3.1",
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/cli": "^2.10.0",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}
