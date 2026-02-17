@@ -110,6 +110,25 @@ body {
   margin-bottom: 16px;
 }
 
+/* Link preview */
+.link-preview {
+  position: fixed;
+  bottom: 8px;
+  left: 12px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-width: 50vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  z-index: 50;
+  pointer-events: none;
+}
+
 .editor-container .cm-editor {
   min-height: 200px;
   border: 1px solid var(--border);
@@ -220,12 +239,33 @@ body {
 }
 
 .notes-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted);
   margin-bottom: 8px;
   padding: 0 4px;
+}
+
+.sort-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font);
+  color: var(--text-muted);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sort-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 
 .note-item {
@@ -256,6 +296,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+}
+
+.starred-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 12px;
 }
 
 .note-item-star {

@@ -15,7 +15,7 @@ import {
   searchNotes,
   toggleStar,
 } from "./api";
-import type { NoteMetadata } from "./api";
+import type { NoteMetadata, SortBy } from "./api";
 
 export interface PanelHandle {
   loadNote: (noteId: string) => Promise<void>;
@@ -43,6 +43,8 @@ interface NotePanelProps {
   isFocused: boolean;
   initialNoteId?: string;
   independent?: boolean;
+  sortBy: SortBy;
+  onSortChange: (sortBy: SortBy) => void;
 }
 
 export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
@@ -56,6 +58,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       isFocused,
       initialNoteId,
       independent,
+      sortBy,
+      onSortChange,
     },
     ref,
   ) => {
@@ -298,7 +302,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             </div>
           )}
         </div>
-        <Editor ref={editorRef} content={content} onChange={handleChange} />
+        <Editor ref={editorRef} content={content} onChange={handleChange} editing={userModified} />
         {userModified && isTyping && (
           <div className="save-hint">
             <kbd>⌘</kbd> + <kbd>Enter</kbd> to save &nbsp; <kbd>Esc</kbd> to
@@ -310,6 +314,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           label={listLabel}
           onOpenNote={handleNoteClick}
           highlightIndex={highlightIndex}
+          sortBy={sortBy}
+          onSortChange={onSortChange}
         />
       </div>
     );

@@ -13,10 +13,12 @@ import { defaultKeymap } from "@codemirror/commands";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { SlashPalette, slashCommands } from "./SlashPalette";
+import { openUrl } from "./api";
 
 interface EditorProps {
   content: string;
   onChange: (value: string) => void;
+  editing: boolean;
 }
 
 export interface EditorHandle {
@@ -81,8 +83,8 @@ const highlightStyle = HighlightStyle.define([
     borderRadius: "4px",
     padding: "2px 6px",
   },
-  { tag: tags.link, color: "var(--accent)", textDecoration: "underline" },
-  { tag: tags.url, color: "var(--accent)" },
+  { tag: tags.link, color: "var(--accent)", textDecoration: "underline", cursor: "pointer" },
+  { tag: tags.url, color: "var(--accent)", cursor: "pointer" },
   { tag: tags.quote, color: "var(--text-muted)", fontStyle: "italic" },
   {
     tag: tags.processingInstruction,
@@ -91,12 +93,44 @@ const highlightStyle = HighlightStyle.define([
   },
 ]);
 
+function findLinkUrl(view: EditorView, clientX: number, clientY: number): string | null {
+  const pos = view.posAtCoords({ x: clientX, y: clientY });
+  if (pos === null) return null;
+
+  const line = view.state.doc.lineAt(pos);
+  const posInLine = pos - line.from;
+  const text = line.text;
+
+  // Check markdown links [text](url)
+  const mdLinkRegex = /\[([^\]]*)\]\(([^)]+)\)/g;
+  let match;
+  while ((match = mdLinkRegex.exec(text)) !== null) {
+    if (posInLine >= match.index && posInLine < match.index + match[0].length) {
+      return match[2];
+    }
+  }
+
+  // Check bare URLs
+  const urlRegex = /https?:\/\/[^\s)>\]]+/g;
+  while ((match = urlRegex.exec(text)) !== null) {
+    if (posInLine >= match.index && posInLine <= match.index + match[0].length) {
+      return match[0];
+    }
+  }
+
+  return null;
+}
+
 export const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange }, ref) => {
+  ({ content, onChange, editing }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
+    const editingRef = useRef(editing);
     const isSettingContent = useRef(false);
+    const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
+
+    editingRef.current = editing;
     const [slashState, setSlashState] = useState<{
       visible: boolean;
       x: number;
@@ -203,7 +237,35 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
 
       viewRef.current = view;
 
+      // Attach native link click handler on the editor DOM
+      const handleClick = (event: MouseEvent) => {
+        if (editingRef.current && !event.metaKey && !event.ctrlKey) return;
+
+        const url = findLinkUrl(view, event.clientX, event.clientY);
+        if (url) {
+          event.preventDefault();
+          event.stopPropagation();
+          openUrl(url);
+        }
+      };
+
+      const handleMouseMove = (event: MouseEvent) => {
+        const url = findLinkUrl(view, event.clientX, event.clientY);
+        setHoveredUrl(url);
+      };
+
+      const handleMouseLeave = () => {
+        setHoveredUrl(null);
+      };
+
+      view.dom.addEventListener("click", handleClick);
+      view.dom.addEventListener("mousemove", handleMouseMove);
+      view.dom.addEventListener("mouseleave", handleMouseLeave);
+
       return () => {
+        view.dom.removeEventListener("click", handleClick);
+        view.dom.removeEventListener("mousemove", handleMouseMove);
+        view.dom.removeEventListener("mouseleave", handleMouseLeave);
         view.destroy();
         viewRef.current = null;
       };
@@ -242,6 +304,9 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
             onSelect={handleSlashSelect}
             onClose={() => setSlashState((s) => ({ ...s, visible: false }))}
           />
+        )}
+        {hoveredUrl && (
+          <div className="link-preview">{hoveredUrl}</div>
         )}
       </div>
     );

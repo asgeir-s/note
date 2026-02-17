@@ -48,9 +48,9 @@ fn get_note(state: State<AppState>, id: String) -> Result<notes::NoteContent, St
 }
 
 #[tauri::command]
-fn list_recent_notes(state: State<AppState>, limit: usize) -> Result<Vec<NoteMetadata>, String> {
+fn list_recent_notes(state: State<AppState>, limit: usize, sort_by: Option<String>) -> Result<Vec<NoteMetadata>, String> {
     let index = state.index.lock().map_err(|e| e.to_string())?;
-    Ok(notes::list_recent_notes(&index, limit))
+    Ok(notes::list_recent_notes(&index, limit, sort_by.as_deref().unwrap_or("created")))
 }
 
 #[tauri::command]

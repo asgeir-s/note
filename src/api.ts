@@ -80,15 +80,24 @@ export async function getNote(id: string): Promise<NoteContent> {
   };
 }
 
+export type SortBy = "created" | "modified";
+
 export async function listRecentNotes(
   limit: number = 20,
+  sortBy: SortBy = "created",
 ): Promise<NoteMetadata[]> {
   if (isTauri()) {
-    return invoke<NoteMetadata[]>("list_recent_notes", { limit });
+    return invoke<NoteMetadata[]>("list_recent_notes", { limit, sortBy });
   }
   const notes = Array.from(memoryNotes.values())
     .map((n) => n.meta)
-    .sort((a, b) => b.created.localeCompare(a.created));
+    .sort((a, b) => {
+      // Starred notes first
+      if (a.starred !== b.starred) return a.starred ? -1 : 1;
+      return sortBy === "modified"
+        ? b.modified.localeCompare(a.modified)
+        : b.created.localeCompare(a.created);
+    });
   return notes.slice(0, limit);
 }
 
@@ -135,6 +144,15 @@ export async function toggleStar(id: string): Promise<NoteMetadata> {
 export async function rebuildIndex(): Promise<void> {
   if (isTauri()) {
     return invoke<void>("rebuild_index");
+  }
+}
+
+export async function openUrl(url: string): Promise<void> {
+  if (isTauri()) {
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(url);
+  } else {
+    window.open(url, "_blank");
   }
 }
 

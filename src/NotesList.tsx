@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
-import type { NoteMetadata } from "./api";
+import type { NoteMetadata, SortBy } from "./api";
 
 interface NotesListProps {
   notes: NoteMetadata[];
   label: string;
   onOpenNote: (id: string, metaKey: boolean) => void;
   highlightIndex?: number;
+  sortBy: SortBy;
+  onSortChange: (sortBy: SortBy) => void;
 }
 
 function relativeTime(dateStr: string): string {
@@ -25,7 +27,7 @@ function relativeTime(dateStr: string): string {
   return date.toLocaleDateString();
 }
 
-export function NotesList({ notes, label, onOpenNote, highlightIndex = -1 }: NotesListProps) {
+export function NotesList({ notes, label, onOpenNote, highlightIndex = -1, sortBy, onSortChange }: NotesListProps) {
   const highlightRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -34,20 +36,37 @@ export function NotesList({ notes, label, onOpenNote, highlightIndex = -1 }: Not
 
   if (notes.length === 0) return null;
 
+  const isRecent = label === "Recent";
+
   return (
     <div className="notes-list">
-      <div className="notes-list-header">{label}</div>
-      {notes.map((note, i) => (
-        <button
-          key={note.id}
-          ref={i === highlightIndex ? highlightRef : undefined}
-          className={`note-item ${i === highlightIndex ? "highlighted" : ""}`}
-          onClick={(e) => onOpenNote(note.id, e.metaKey)}
-        >
-          <span className="note-item-title">{note.starred && <span className="note-item-star">{"\u2605"}</span>}{note.title}</span>
-          <span className="note-item-time">{relativeTime(note.modified)}</span>
-        </button>
-      ))}
+      <div className="notes-list-header">
+        <span>{label}</span>
+        {isRecent && (
+          <button
+            className="sort-toggle"
+            onClick={() => onSortChange(sortBy === "created" ? "modified" : "created")}
+          >
+            {sortBy === "created" ? "Created" : "Updated"}
+          </button>
+        )}
+      </div>
+      {notes.map((note, i) => {
+        const showDivider = i > 0 && notes[i - 1].starred && !note.starred;
+        return (
+          <div key={note.id}>
+            {showDivider && <div className="starred-divider" />}
+            <button
+              ref={i === highlightIndex ? highlightRef : undefined}
+              className={`note-item ${i === highlightIndex ? "highlighted" : ""}`}
+              onClick={(e) => onOpenNote(note.id, e.metaKey)}
+            >
+              <span className="note-item-title">{note.starred && <span className="note-item-star">{"\u2605"}</span>}{note.title}</span>
+              <span className="note-item-time">{relativeTime(sortBy === "modified" ? note.modified : note.created)}</span>
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

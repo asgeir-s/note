@@ -253,10 +253,18 @@ pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<Note
     })
 }
 
-/// List recent notes sorted by created date descending
-pub fn list_recent_notes(index: &NoteIndex, limit: usize) -> Vec<NoteMetadata> {
+/// List recent notes sorted by the given field descending, starred pinned to top
+pub fn list_recent_notes(index: &NoteIndex, limit: usize, sort_by: &str) -> Vec<NoteMetadata> {
     let mut notes: Vec<&NoteMetadata> = index.notes.values().collect();
-    notes.sort_by(|a, b| b.created.cmp(&a.created));
+    notes.sort_by(|a, b| {
+        // Starred notes first
+        b.starred.cmp(&a.starred).then_with(|| {
+            match sort_by {
+                "modified" => b.modified.cmp(&a.modified),
+                _ => b.created.cmp(&a.created),
+            }
+        })
+    });
     notes.into_iter().take(limit).cloned().collect()
 }
 

@@ -4,7 +4,7 @@ import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
 import { listRecentNotes, getAllTags, rebuildIndex } from "./api";
-import type { NoteMetadata } from "./api";
+import type { NoteMetadata, SortBy } from "./api";
 
 interface PanelState {
   id: string;
@@ -26,6 +26,7 @@ export default function App() {
   const [recentNotes, setRecentNotes] = useState<NoteMetadata[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
   const [showHotkeys, setShowHotkeys] = useState(false);
+  const [sortBy, setSortBy] = useState<SortBy>("created");
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,10 +57,15 @@ export default function App() {
     init();
   }, []);
 
+  // Re-fetch when sort order changes
+  useEffect(() => {
+    refreshSharedState();
+  }, [sortBy]);
+
   const refreshSharedState = useCallback(async () => {
     try {
       const [notes, tags] = await Promise.all([
-        listRecentNotes(20),
+        listRecentNotes(20, sortBy),
         getAllTags(),
       ]);
       setRecentNotes(notes);
@@ -67,7 +73,7 @@ export default function App() {
     } catch {
       // Ignore errors
     }
-  }, []);
+  }, [sortBy]);
 
   const setPanelRef = useCallback(
     (panelId: string) => (handle: PanelHandle | null) => {
@@ -426,6 +432,8 @@ export default function App() {
               isFocused={activePanelIndex === index}
               initialNoteId={panel.initialNoteId}
               independent={panel.independent}
+              sortBy={sortBy}
+              onSortChange={setSortBy}
             />
           </div>
         </Fragment>
