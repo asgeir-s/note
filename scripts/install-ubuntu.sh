@@ -32,6 +32,6 @@ fi
 
 DEB_ABS="$(cd -- "$(dirname -- "$DEB_PATH")" && pwd)/$(basename -- "$DEB_PATH")"
 
-sudo apt-get install -y "$DEB_ABS"
+sudo apt-get install -y --reinstall "$DEB_ABS"
 
 echo "Installed $(basename -- "$DEB_ABS")"
