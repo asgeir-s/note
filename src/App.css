@@ -23,9 +23,26 @@ body,
   padding: 3rem 1rem;
 }
 
+.editor-layout {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.editor-layout.with-side {
+  display: grid;
+  grid-template-columns: minmax(0, 680px) minmax(240px, 360px);
+  gap: 1rem;
+  align-items: start;
+}
+
 .editor-column {
   max-width: 680px;
-  margin: 0 auto;
+}
+
+.edit-indicator {
+  margin-bottom: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .cm-editor {
@@ -91,6 +108,46 @@ body,
 
 .note-row small {
   color: var(--muted);
+}
+
+.side-view {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.side-head button,
+.side-links button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
+}
+
+.side-view pre {
+  margin: 0 0 0.75rem;
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--text);
+}
+
+.side-links {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.side-links button {
+  text-align: left;
 }
 
 @media (prefers-color-scheme: dark) {

@@ -39,20 +39,47 @@ const SLASH_COMMANDS = [
 ];
 
 const hasTauriInvoke = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const WEB_DEMO_NOTES: NoteSummary[] = [
+  {
+    id: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+    path: "20260216143200-main_note.md",
+    title: "Main note",
+    created: "2026-02-16T14:32:00+01:00",
+    tags: ["demo"],
+  },
+  {
+    id: "e5f6a7b8-1234-5678-90ab-cdef12345678",
+    path: "20260216150000-related_note.md",
+    title: "Related note",
+    created: "2026-02-16T15:00:00+01:00",
+    tags: ["demo"],
+  },
+];
+const WEB_DEMO_CONTENT: Record<string, string> = {
+  "20260216143200-main_note.md":
+    "---\nid: a1b2c3d4-5678-90ab-cdef-1234567890ab\ncreated: 2026-02-16T14:32:00+01:00\ntags: [demo]\n---\n\n# Main note\n\nConnected [[note:e5f6a7b8-1234-5678-90ab-cdef12345678]].\n",
+  "20260216150000-related_note.md":
+    "---\nid: e5f6a7b8-1234-5678-90ab-cdef12345678\ncreated: 2026-02-16T15:00:00+01:00\ntags: [demo]\n---\n\n# Related note\n\nBack to [[note:a1b2c3d4-5678-90ab-cdef-1234567890ab]].\n",
+};
 
 async function backendInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!hasTauriInvoke()) {
     if (command === "get_app_data") {
-      return { notesDir: "", recent: [], tags: [] } as T;
+      return { notesDir: "", recent: WEB_DEMO_NOTES, tags: ["demo"] } as T;
     }
-    if (command === "list_recent_notes" || command === "search_notes") {
-      return [] as T;
+    if (command === "list_recent_notes") {
+      return WEB_DEMO_NOTES as T;
+    }
+    if (command === "search_notes") {
+      const query = String(args?.query ?? "").toLowerCase();
+      return WEB_DEMO_NOTES.filter((note) => note.title.toLowerCase().includes(query)) as T;
     }
     if (command === "list_tags") {
-      return [] as T;
+      return ["demo"] as T;
     }
     if (command === "open_note") {
-      return "" as T;
+      const path = String(args?.path ?? "");
+      return (WEB_DEMO_CONTENT[path] ?? "") as T;
     }
     if (command === "save_note") {
       return {
@@ -70,13 +97,28 @@ function App() {
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [recentNotes, setRecentNotes] = useState<NoteSummary[]>([]);
   const [relatedNotes, setRelatedNotes] = useState<NoteSummary[]>([]);
+  const [allNotes, setAllNotes] = useState<NoteSummary[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
   const [cursorPos, setCursorPos] = useState(0);
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [showTagInput, setShowTagInput] = useState(false);
   const [tagValue, setTagValue] = useState("");
+  const [sideNote, setSideNote] = useState<{ note: NoteSummary; content: string } | null>(null);
 
-  const shownNotes = content.trim() ? relatedNotes : recentNotes;
+  const shownNotes = content.trim()
+    ? relatedNotes.length > 0
+      ? relatedNotes
+      : recentNotes
+    : recentNotes;
+  const isEditing = currentPath !== null;
+  const currentEditingTitle = useMemo(
+    () => allNotes.find((note) => note.path === currentPath)?.title ?? "Current note",
+    [allNotes, currentPath],
+  );
+  const noteById = useMemo(
+    () => new Map(allNotes.map((note) => [note.id, note])),
+    [allNotes],
+  );
 
   const slashMatches = useMemo(
     () =>
@@ -118,17 +160,21 @@ function App() {
 
   async function initialize() {
     const data = await backendInvoke<AppData>("get_app_data");
+    const notes = await backendInvoke<NoteSummary[]>("list_recent_notes", { limit: 10000 });
     setRecentNotes(data.recent);
+    setAllNotes(notes);
     setAllTags(data.tags);
   }
 
   async function refreshRecentAndTags() {
-    const [recent, tags] = await Promise.all([
+    const [recent, tags, notes] = await Promise.all([
       backendInvoke<NoteSummary[]>("list_recent_notes"),
       backendInvoke<string[]>("list_tags"),
+      backendInvoke<NoteSummary[]>("list_recent_notes", { limit: 10000 }),
     ]);
     setRecentNotes(recent);
     setAllTags(tags);
+    setAllNotes(notes);
   }
 
   async function openNote(path: string) {
@@ -139,6 +185,29 @@ function App() {
     setShowTagInput(false);
   }
 
+  async function openSideNote(note: NoteSummary) {
+    const noteContent = await backendInvoke<string>("open_note", { path: note.path });
+    setSideNote({ note, content: noteContent });
+  }
+
+  async function handleNoteSelection(note: NoteSummary) {
+    if (isEditing) {
+      await openSideNote(note);
+      return;
+    }
+    await openNote(note.path);
+  }
+
+  function extractConnectedIds(markdownContent: string) {
+    const ids = new Set<string>();
+    const linkPattern = /\[\[note:([0-9a-fA-F-]{36})\]\]/g;
+    let match: RegExpExecArray | null;
+    while ((match = linkPattern.exec(markdownContent)) !== null) {
+      ids.add(match[1]);
+    }
+    return [...ids];
+  }
+
   async function saveCurrent() {
     if (!content.trim()) return;
     const saved = await backendInvoke<SaveResponse>("save_note", {
@@ -147,6 +216,7 @@ function App() {
     setContent("");
     setCurrentPath(null);
     setRelatedNotes([]);
+    setSideNote(null);
     setShowTagInput(false);
     setTagValue("");
     await refreshRecentAndTags();
@@ -157,6 +227,7 @@ function App() {
     setContent("");
     setCurrentPath(null);
     setRelatedNotes([]);
+    setSideNote(null);
     setSlashQuery(null);
     setShowTagInput(false);
     setTagValue("");
@@ -261,73 +332,107 @@ function App() {
 
   return (
     <main className="dump-shell">
-      <section className="editor-column">
-        <CodeMirror
-          ref={editorRef}
-          value={content}
-          extensions={cmExtensions}
-          basicSetup={{
-            lineNumbers: false,
-            foldGutter: false,
-            highlightActiveLine: false,
-            highlightActiveLineGutter: false,
-          }}
-          placeholder="Write..."
-          onChange={(value) => setContent(value)}
-          onUpdate={(update: ViewUpdate) => {
-            if (update.selectionSet || update.docChanged) {
-              const position = update.state.selection.main.head;
-              setCursorPos(position);
-              detectSlash(update.state.doc.toString(), position);
-            }
-          }}
-        />
+      <section className={`editor-layout${sideNote ? " with-side" : ""}`}>
+        <div className="editor-column">
+          {isEditing && (
+            <div className="edit-indicator">
+              Editing: <strong>{currentEditingTitle}</strong>
+            </div>
+          )}
+          <CodeMirror
+            ref={editorRef}
+            value={content}
+            extensions={cmExtensions}
+            basicSetup={{
+              lineNumbers: false,
+              foldGutter: false,
+              highlightActiveLine: false,
+              highlightActiveLineGutter: false,
+            }}
+            placeholder="Write..."
+            onChange={(value) => setContent(value)}
+            onUpdate={(update: ViewUpdate) => {
+              if (update.selectionSet || update.docChanged) {
+                const position = update.state.selection.main.head;
+                setCursorPos(position);
+                detectSlash(update.state.doc.toString(), position);
+              }
+            }}
+          />
 
-        {showTagInput && (
-          <div className="tag-input-row">
-            <input
-              autoFocus
-              list="tag-suggestions"
-              value={tagValue}
-              placeholder="Tag..."
-              onChange={(e) => setTagValue(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  upsertTag(tagValue);
-                  setTagValue("");
-                  setShowTagInput(false);
-                }
-                if (e.key === "Escape") {
-                  setShowTagInput(false);
-                }
-              }}
-            />
-            <datalist id="tag-suggestions">
-              {allTags.map((tag) => (
-                <option key={tag} value={tag} />
+          {showTagInput && (
+            <div className="tag-input-row">
+              <input
+                autoFocus
+                list="tag-suggestions"
+                value={tagValue}
+                placeholder="Tag..."
+                onChange={(e) => setTagValue(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    upsertTag(tagValue);
+                    setTagValue("");
+                    setShowTagInput(false);
+                  }
+                  if (e.key === "Escape") {
+                    setShowTagInput(false);
+                  }
+                }}
+              />
+              <datalist id="tag-suggestions">
+                {allTags.map((tag) => (
+                  <option key={tag} value={tag} />
+                ))}
+              </datalist>
+            </div>
+          )}
+
+          {slashMatches.length > 0 && (
+            <div className="slash-palette">
+              {slashMatches.map((cmd) => (
+                <button key={cmd.label} type="button" onClick={() => applyCommand(cmd.label)}>
+                  {cmd.label}
+                </button>
               ))}
-            </datalist>
-          </div>
-        )}
+            </div>
+          )}
 
-        {slashMatches.length > 0 && (
-          <div className="slash-palette">
-            {slashMatches.map((cmd) => (
-              <button key={cmd.label} type="button" onClick={() => applyCommand(cmd.label)}>
-                {cmd.label}
+          <div className="notes-list">
+            {shownNotes.map((note) => (
+              <button
+                key={note.id}
+                type="button"
+                className="note-row"
+                onClick={() => void handleNoteSelection(note)}
+              >
+                <span>{content.trim() ? `Related: "${note.title}"` : note.title}</span>
+                {!content.trim() && <small>{relativeTime(note.created)}</small>}
               </button>
             ))}
           </div>
-        )}
-
-        <div className="notes-list">
-          {shownNotes.map((note) => (
-            <button key={note.id} type="button" className="note-row" onClick={() => void openNote(note.path)}>
-              <span>{content.trim() ? `Related: "${note.title}"` : note.title}</span>
-              {!content.trim() && <small>{relativeTime(note.created)}</small>}
-            </button>
-          ))}
         </div>
+        {sideNote && (
+          <aside className="side-view">
+            <div className="side-head">
+              <strong>{sideNote.note.title}</strong>
+              <button type="button" onClick={() => void openNote(sideNote.note.path).then(() => setSideNote(null))}>
+                Start editing
+              </button>
+            </div>
+            <pre>{sideNote.content}</pre>
+            <div className="side-links">
+              {extractConnectedIds(sideNote.content).map((id) => {
+                const note = noteById.get(id);
+                if (!note) return null;
+                return (
+                  <button key={id} type="button" onClick={() => void openSideNote(note)}>
+                    {note.title}
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        )}
       </section>
     </main>
   );
