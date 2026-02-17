@@ -82,13 +82,13 @@ Notes are stored as flat files in `~/dump/` (configurable).
 
 ## Keyboard Shortcuts
 
-| Shortcut    | Action                          |
-| ----------- | ------------------------------- |
-| `Cmd/Ctrl+Enter` | Save note                  |
-| `Escape`    | Clear textarea, discard content |
-| `Cmd/Ctrl+T` | Toggle tag input               |
-| `Cmd/Ctrl+Click` | Open note in new panel      |
-| `Ctrl+Cmd++` | Show shortcut list             |
+| Shortcut         | Action                          |
+| ---------------- | ------------------------------- |
+| `Cmd/Ctrl+Enter` | Save note                       |
+| `Escape`         | Clear textarea, discard content |
+| `Cmd/Ctrl+T`     | Toggle tag input                |
+| `Cmd/Ctrl+Click` | Open note in new panel          |
+| `Ctrl+Cmd++`     | Show shortcut list              |
 
 ## Slash Commands
 

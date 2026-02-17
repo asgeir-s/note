@@ -7,6 +7,7 @@ import {
   useImperativeHandle,
 } from "react";
 import { Editor } from "./Editor";
+import { MarkdownView } from "./MarkdownView";
 import { NotesList } from "./NotesList";
 import { TagInput } from "./TagInput";
 import {
@@ -101,9 +102,6 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           setTags(note.tags);
           setStarred(note.starred);
           setUserModified(false);
-          // Remove focus from editor so keystrokes don't go to it.
-          editorRef.current?.blur();
-          requestAnimationFrame(() => editorRef.current?.blur());
         } catch (e) {
           console.error("Failed to load note:", e);
         }
@@ -160,7 +158,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         focusEditor: () => editorRef.current?.focus(),
         edit: () => {
           setUserModified(true);
-          editorRef.current?.focus();
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => editorRef.current?.focus()),
+          );
         },
         discardEdits: () => {
           if (loadedNoteId) {
@@ -293,6 +293,13 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       [onNoteClick],
     );
 
+    const editing = userModified || !loadedNoteId;
+
+    const handleEdit = useCallback(() => {
+      setUserModified(true);
+      requestAnimationFrame(() => editorRef.current?.focus());
+    }, []);
+
     const displayedNotes = isTyping ? relatedNotes : recentNotes;
     const listLabel = isTyping ? "Related" : "Recent";
 
@@ -323,7 +330,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             </div>
           )}
         </div>
-        <Editor ref={editorRef} content={content} onChange={handleChange} editing={userModified || !loadedNoteId} themeId={themeId} />
+        {editing ? (
+          <Editor ref={editorRef} content={content} onChange={handleChange} themeId={themeId} />
+        ) : (
+          <MarkdownView content={content} onEdit={handleEdit} />
+        )}
         <div className="save-hint">
           {/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
             ? <><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd> shortcuts</>

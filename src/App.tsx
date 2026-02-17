@@ -445,14 +445,28 @@ export default function App() {
         activePanel.navigateList(1);
         return;
       }
-      // J/K/ArrowDown/ArrowUp and Enter for list navigation (only when not editing and editor not focused)
+      // Cmd+J/K — navigate list up/down
+      if ((e.key === "j" || e.key === "k") && (e.metaKey || e.ctrlKey) && !editorFocused) {
+        e.preventDefault();
+        activePanel.navigateList(e.key === "j" ? 1 : -1);
+        return;
+      }
+      // J/K — scroll active panel, ArrowDown/ArrowUp — navigate list (only when not editing and editor not focused)
       if (!e.metaKey && !e.ctrlKey && !editorFocused) {
-        if (e.key === "j" || e.key === "ArrowDown") {
+        if (e.key === "j" || e.key === "k") {
+          e.preventDefault();
+          const panelEl = document.querySelectorAll(".panel-container")[activePanelIndex];
+          if (panelEl) {
+            panelEl.scrollBy({ top: e.key === "j" ? 100 : -100 });
+          }
+          return;
+        }
+        if (e.key === "ArrowDown") {
           e.preventDefault();
           activePanel.navigateList(1);
           return;
         }
-        if (e.key === "k" || e.key === "ArrowUp") {
+        if (e.key === "ArrowUp") {
           e.preventDefault();
           activePanel.navigateList(-1);
           return;
@@ -758,6 +772,9 @@ export default function App() {
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>L</kbd><span>Focus right panel</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>W</kbd><span>Close rightmost panel</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>Click</kbd><span>Open in new panel</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>J</kbd><span>Select next note</span></div>
+              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>K</kbd><span>Select previous note</span></div>
+              <div className="hotkey-row"><kbd>J</kbd> / <kbd>K</kbd><span>Scroll down / up</span></div>
               <div className="hotkey-row"><kbd>Esc</kbd><span>Discard edits / close panel</span></div>
               <div className="hotkey-row"><kbd>Tab</kbd><span>Exit editor to list</span></div>
               <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>+</kbd><span>Zoom in</span></div>

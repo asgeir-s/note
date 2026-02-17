@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "tauri dev",
+    "vite-dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
@@ -24,6 +25,7 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/cli": "^2.10.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "marked": "^17.0.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

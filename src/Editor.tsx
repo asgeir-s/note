@@ -19,7 +19,6 @@ import { openUrl } from "./api";
 interface EditorProps {
   content: string;
   onChange: (value: string) => void;
-  editing: boolean;
   themeId: string;
 }
 
@@ -71,13 +70,6 @@ const normalHighlightStyle = HighlightStyle.define([
   { tag: tags.processingInstruction, color: "var(--text-muted)", fontSize: "0.85em" },
 ]);
 
-// MD mode: plain raw markdown, no visual formatting
-const rawHighlightStyle = HighlightStyle.define([
-  { tag: tags.link, color: "var(--accent)" },
-  { tag: tags.url, color: "var(--accent)" },
-  { tag: tags.processingInstruction, color: "var(--text-muted)" },
-]);
-
 // Structural-only style: heading sizes & bold/italic, but no colors
 // Used when an external theme is active so theme colors show through
 const structuralHighlightStyle = HighlightStyle.define([
@@ -118,19 +110,13 @@ function findLinkUrl(view: EditorView, clientX: number, clientY: number): string
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, editing, themeId }, ref) => {
+  ({ content, onChange, themeId }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
-    const editingRef = useRef(editing);
     const isSettingContent = useRef(false);
     const highlightCompartment = useRef(new Compartment());
     const themeCompartment = useRef(new Compartment());
-    const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
-    const [rawMode, setRawMode] = useState(false);
-
-    editingRef.current = editing;
-    const [caretHidden, setCaretHidden] = useState(false);
 
     const [slashState, setSlashState] = useState<{
       visible: boolean;
@@ -239,9 +225,9 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
 
       viewRef.current = view;
 
-      // Attach native link click handler on the editor DOM
+      // Cmd+Click to open links
       const handleClick = (event: MouseEvent) => {
-        if (editingRef.current && !event.metaKey && !event.ctrlKey) return;
+        if (!event.metaKey && !event.ctrlKey) return;
 
         const url = findLinkUrl(view, event.clientX, event.clientY);
         if (url) {
@@ -251,29 +237,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
         }
       };
 
-      const handleMouseMove = (event: MouseEvent) => {
-        const url = findLinkUrl(view, event.clientX, event.clientY);
-        setHoveredUrl(url);
-      };
-
-      const handleMouseLeave = () => {
-        setHoveredUrl(null);
-      };
-
-      const handleMouseDown = () => {
-        setCaretHidden(false);
-      };
-
       view.dom.addEventListener("click", handleClick);
-      view.dom.addEventListener("mousedown", handleMouseDown);
-      view.dom.addEventListener("mousemove", handleMouseMove);
-      view.dom.addEventListener("mouseleave", handleMouseLeave);
 
       return () => {
         view.dom.removeEventListener("click", handleClick);
-        view.dom.removeEventListener("mousedown", handleMouseDown);
-        view.dom.removeEventListener("mousemove", handleMouseMove);
-        view.dom.removeEventListener("mouseleave", handleMouseLeave);
         view.destroy();
         viewRef.current = null;
       };
@@ -281,22 +248,17 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Reconfigure highlight style when raw mode or theme changes
+    // Reconfigure highlight style when theme changes
     useEffect(() => {
       const view = viewRef.current;
       if (!view) return;
-      let style: HighlightStyle;
-      if (rawMode) {
-        style = rawHighlightStyle;
-      } else if (themeId !== "default" && themes[themeId]) {
-        style = structuralHighlightStyle;
-      } else {
-        style = normalHighlightStyle;
-      }
+      const style = (themeId !== "default" && themes[themeId])
+        ? structuralHighlightStyle
+        : normalHighlightStyle;
       view.dispatch({
         effects: highlightCompartment.current.reconfigure(syntaxHighlighting(style)),
       });
-    }, [rawMode, themeId]);
+    }, [themeId]);
 
     // Reconfigure CodeMirror theme when themeId changes
     useEffect(() => {
@@ -308,20 +270,6 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
         effects: themeCompartment.current.reconfigure(ext),
       });
     }, [themeId]);
-
-    // Hide caret and blur when entering view mode (note loaded)
-    useEffect(() => {
-      const view = viewRef.current;
-      if (!view) return;
-      if (!editing) {
-        setCaretHidden(true);
-        if (view.hasFocus) {
-          view.contentDOM.blur();
-        }
-      } else {
-        setCaretHidden(false);
-      }
-    }, [editing]);
 
     // Sync external content changes to editor
     useEffect(() => {
@@ -347,14 +295,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
     const isThemed = themeId !== "default" && !!themes[themeId];
 
     return (
-      <div className={`editor-container ${editing ? "" : "viewing"} ${caretHidden ? "caret-hidden" : ""} ${rawMode ? "raw-mode" : ""} ${isThemed ? "themed" : ""}`} ref={containerRef}>
-        <button
-          className="mode-toggle"
-          onClick={() => setRawMode((r) => !r)}
-          title={rawMode ? "Switch to normal mode" : "Switch to markdown mode"}
-        >
-          {rawMode ? "Aa" : "MD"}
-        </button>
+      <div className={`editor-container ${isThemed ? "themed" : ""}`} ref={containerRef}>
         {slashState.visible && filteredCommands.length > 0 && (
           <SlashPalette
             commands={filteredCommands}
@@ -363,9 +304,6 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
             onSelect={handleSlashSelect}
             onClose={() => setSlashState((s) => ({ ...s, visible: false }))}
           />
-        )}
-        {hoveredUrl && (
-          <div className="link-preview">{hoveredUrl}</div>
         )}
       </div>
     );
