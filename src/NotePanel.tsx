@@ -19,6 +19,7 @@ import type { NoteMetadata, SortBy } from "./api";
 
 export interface PanelHandle {
   loadNote: (noteId: string) => Promise<void>;
+  refreshLoadedNote: () => Promise<void>;
   clear: () => void;
   focusEditor: () => void;
   isUserModified: () => boolean;
@@ -150,6 +151,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       ref,
       () => ({
         loadNote,
+        refreshLoadedNote: async () => {
+          const current = loadedNoteIdRef.current;
+          if (!current || userModified) return;
+          await loadNoteInternal(current, false);
+        },
         clear: clearPanel,
         focusEditor: () => editorRef.current?.focus(),
         edit: () => {

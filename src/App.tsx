@@ -76,6 +76,19 @@ export default function App() {
     localStorage.setItem("note-zoom", String(zoom));
   }, [zoom]);
 
+  const refreshSharedState = useCallback(async () => {
+    try {
+      const [notes, tags] = await Promise.all([
+        listRecentNotes(20, sortBy),
+        getAllTags(),
+      ]);
+      setRecentNotes(notes);
+      setAllTags(tags);
+    } catch {
+      // Ignore errors
+    }
+  }, [sortBy]);
+
   // Init
   useEffect(() => {
     applyThemeVars(themeId);
@@ -97,15 +110,26 @@ export default function App() {
       }
     };
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    // Listen for git sync errors
+  // Listen for backend sync events
+  useEffect(() => {
     let unlistenGitError: (() => void) | undefined;
+    let unlistenNotesChanged: (() => void) | undefined;
+
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
         unlistenGitError = await listen<string>("git-sync-error", (event) => {
           setGitError(event.payload);
           setTimeout(() => setGitError(null), 5000);
+        });
+        unlistenNotesChanged = await listen("notes-changed", () => {
+          void refreshSharedState();
+          for (const panel of panelRefs.current.values()) {
+            void panel.refreshLoadedNote();
+          }
         });
       } catch {
         // Not in Tauri
@@ -114,27 +138,14 @@ export default function App() {
 
     return () => {
       unlistenGitError?.();
+      unlistenNotesChanged?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshSharedState]);
 
   // Re-fetch when sort order changes
   useEffect(() => {
     refreshSharedState();
-  }, [sortBy]);
-
-  const refreshSharedState = useCallback(async () => {
-    try {
-      const [notes, tags] = await Promise.all([
-        listRecentNotes(20, sortBy),
-        getAllTags(),
-      ]);
-      setRecentNotes(notes);
-      setAllTags(tags);
-    } catch {
-      // Ignore errors
-    }
-  }, [sortBy]);
+  }, [refreshSharedState]);
 
   const setPanelRef = useCallback(
     (panelId: string) => (handle: PanelHandle | null) => {
@@ -585,11 +596,14 @@ export default function App() {
     if (!gitRemoteUrl.trim()) return;
     try {
       await setGitRemote(gitRemoteUrl.trim());
+      setGitBanner(false);
+      setGitRemoteUrl("");
+      setGitError(null);
     } catch (e) {
       console.error("Failed to set git remote:", e);
+      setGitError(e instanceof Error ? e.message : String(e));
+      setTimeout(() => setGitError(null), 5000);
     }
-    setGitBanner(false);
-    setGitRemoteUrl("");
   }, [gitRemoteUrl]);
 
   const handleGitDismiss = useCallback(async () => {
