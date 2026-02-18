@@ -42,7 +42,7 @@ pub struct QmdHandle {
 }
 
 impl QmdHandle {
-    pub fn new(notes_dir: &str, app_handle: tauri::AppHandle) -> Self {
+    pub fn new(notes_dir: &str, app_handle: tauri::AppHandle, keyword_model: Option<String>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let dir = PathBuf::from(notes_dir);
         let cache_path = dir.join(".dump-related.json");
@@ -51,8 +51,9 @@ impl QmdHandle {
         let cache = Arc::new(RwLock::new(cache));
         let worker_cache = cache.clone();
 
+        let model = keyword_model.unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
         tauri::async_runtime::spawn(async move {
-            run_worker(rx, dir, app_handle, worker_cache).await;
+            run_worker(rx, dir, app_handle, worker_cache, model).await;
         });
 
         Self { tx, cache }
@@ -179,6 +180,7 @@ async fn run_worker(
     dir: PathBuf,
     app_handle: tauri::AppHandle,
     cache: Arc<RwLock<RelatedCache>>,
+    ollama_model: String,
 ) {
     if !qmd_available().await {
         eprintln!("qmd: not installed, entering drain mode");
@@ -199,9 +201,9 @@ async fn run_worker(
         eprintln!("qmd: initial embed failed: {e}");
     }
 
-    let has_ollama = ollama_available().await;
+    let has_ollama = ollama_available(&ollama_model).await;
     if has_ollama {
-        eprintln!("qmd: ollama available, using {OLLAMA_MODEL} for keyword extraction");
+        eprintln!("qmd: ollama available, using {ollama_model} for keyword extraction");
     } else {
         eprintln!("qmd: ollama not available, using title-only queries");
     }
@@ -216,7 +218,7 @@ async fn run_worker(
             tokio::select! {
                 msg = rx.recv() => msg,
                 _ = tokio::time::sleep_until(dl) => {
-                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama).await;
+                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama, &ollama_model).await;
                     deadline = None;
                     last_reindex = Instant::now();
                     continue;
@@ -254,13 +256,13 @@ async fn run_worker(
             }
             Some(Msg::Shutdown) => {
                 if !pending.is_empty() {
-                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama).await;
+                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama, &ollama_model).await;
                 }
                 break;
             }
             None => {
                 if !pending.is_empty() {
-                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama).await;
+                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama, &ollama_model).await;
                 }
                 break;
             }
@@ -275,6 +277,7 @@ async fn process_pending(
     cache_path: &Path,
     app_handle: &tauri::AppHandle,
     has_ollama: bool,
+    ollama_model: &str,
 ) {
     if pending.is_empty() {
         return;
@@ -307,7 +310,7 @@ async fn process_pending(
 
     for (note_id, title) in &items {
         let note_tags = id_to_tags.get(note_id).cloned().unwrap_or_default();
-        let (query_text, keywords) = build_query(dir, title, id_to_path.get(note_id), &note_tags, has_ollama).await;
+        let (query_text, keywords) = build_query(dir, title, id_to_path.get(note_id), &note_tags, has_ollama, ollama_model).await;
 
         // Auto-tag notes that have no tags
         if let Some(ref kw) = keywords {
@@ -438,7 +441,7 @@ fn build_maps(app_handle: &tauri::AppHandle) -> (HashMap<String, String>, HashMa
 /// Otherwise asks ollama to extract keywords from content.
 /// Returns (query_string, parsed_keywords) — keywords are only Some when ollama was called
 /// (used for auto-tagging notes that have no tags).
-async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, tags: &[String], has_ollama: bool) -> (String, Option<Vec<String>>) {
+async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, tags: &[String], has_ollama: bool, ollama_model: &str) -> (String, Option<Vec<String>>) {
     // If the note already has tags, use them as the query — no need for ollama.
     if !tags.is_empty() {
         let tag_str = tags.join(", ");
@@ -455,7 +458,7 @@ async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, tags: &
             // Limit to ~2000 chars to keep the prompt short and fast.
             let truncated: String = body.chars().take(2000).collect();
             if truncated.trim().len() > 20 {
-                if let Some(keywords) = ollama_extract_keywords(&truncated).await {
+                if let Some(keywords) = ollama_extract_keywords(&truncated, ollama_model).await {
                     let parsed: Vec<String> = keywords
                         .split(',')
                         .map(|k| k.trim().to_lowercase())
@@ -481,16 +484,16 @@ fn strip_frontmatter(content: &str) -> &str {
     content
 }
 
-const OLLAMA_MODEL: &str = "qwen2.5:1.5b";
+const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:1.5b";
 
-async fn ollama_available() -> bool {
+async fn ollama_available(model: &str) -> bool {
     // Check if ollama binary exists.
     if cmd("ollama").arg("--version").output().await.is_err() {
         return false;
     }
 
     // Check if model is available (also tests if server is running).
-    if let Ok(o) = cmd("ollama").args(["show", OLLAMA_MODEL]).output().await {
+    if let Ok(o) = cmd("ollama").args(["show", model]).output().await {
         if o.status.success() {
             return true;
         }
@@ -503,7 +506,7 @@ async fn ollama_available() -> bool {
             tokio::time::sleep(Duration::from_secs(2)).await;
             // Retry.
             return cmd("ollama")
-                .args(["show", OLLAMA_MODEL])
+                .args(["show", model])
                 .output()
                 .await
                 .map(|o| o.status.success())
@@ -513,7 +516,7 @@ async fn ollama_available() -> bool {
     false
 }
 
-async fn ollama_extract_keywords(text: &str) -> Option<String> {
+async fn ollama_extract_keywords(text: &str, model: &str) -> Option<String> {
     let preview: String = text.chars().take(60).collect();
     eprintln!("qmd: ollama → \"{}...\"", preview.replace('\n', " "));
 
@@ -522,7 +525,7 @@ async fn ollama_extract_keywords(text: &str) -> Option<String> {
         text
     );
     let output = cmd("ollama")
-        .args(["run", OLLAMA_MODEL, &prompt])
+        .args(["run", model, &prompt])
         .output()
         .await
         .ok()?;
@@ -850,7 +853,11 @@ pub async fn regenerate_tags(
         return Err("Note content too short for keyword extraction".into());
     }
 
-    let keywords_str = ollama_extract_keywords(&truncated).await
+    let keyword_model = state.model_settings.lock()
+        .ok()
+        .and_then(|ms| ms.keyword_model.clone())
+        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+    let keywords_str = ollama_extract_keywords(&truncated, &keyword_model).await
         .ok_or("Ollama keyword extraction failed")?;
 
     let keywords: Vec<String> = keywords_str
@@ -901,7 +908,7 @@ pub async fn check_tools() -> ToolStatus {
         .unwrap_or(false);
 
     let qmd = qmd_available().await;
-    let ollama = ollama_available().await;
+    let ollama = ollama_available(DEFAULT_OLLAMA_MODEL).await;
 
     let ffmpeg = cmd("ffmpeg")
         .arg("-version")

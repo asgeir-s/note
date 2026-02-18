@@ -340,6 +340,60 @@ export async function getRelatedNotes(id: string): Promise<NoteMetadata[]> {
   return [];
 }
 
+// ── Model Settings API ──────────────────────────────────────────────
+
+export interface ModelSettings {
+  keyword_model: string | null;
+  summary_model: string | null;
+  whisper_model: string | null;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  size_bytes: number | null;
+  installed: boolean;
+  parameter_size: string | null;
+}
+
+export interface WhisperModelInfo {
+  name: string;
+  path: string;
+  size_bytes: number;
+}
+
+export async function getModelSettings(): Promise<ModelSettings> {
+  if (isTauri()) {
+    return invoke<ModelSettings>("get_model_settings");
+  }
+  return { keyword_model: null, summary_model: null, whisper_model: null };
+}
+
+export async function setModelSettings(settings: ModelSettings): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("set_model_settings", { settings });
+  }
+}
+
+export async function listOllamaModels(): Promise<OllamaModelInfo[]> {
+  if (isTauri()) {
+    return invoke<OllamaModelInfo[]>("list_ollama_models");
+  }
+  return [];
+}
+
+export async function listWhisperModels(): Promise<WhisperModelInfo[]> {
+  if (isTauri()) {
+    return invoke<WhisperModelInfo[]>("list_whisper_models");
+  }
+  return [];
+}
+
+export async function pullOllamaModel(name: string): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("pull_ollama_model", { name });
+  }
+}
+
 function extractTitle(content: string): string {
   for (const line of content.split("\n")) {
     const trimmed = line.trim();

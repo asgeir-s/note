@@ -27,3 +27,5 @@ regex = "1"
 tokio = { version = "1", features = ["sync", "time", "rt", "process", "macros"] }
 cpal = "0.17"
 hound = "3.5"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"

@@ -3,14 +3,15 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools, startRecording, stopRecording, checkPendingJobs, appendMeetingData as appendMeetingDataToNote } from "./api";
+import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools, startRecording, stopRecording, checkPendingJobs, appendMeetingData as appendMeetingDataToNote, getModelSettings, setModelSettings as setModelSettingsApi, listOllamaModels, listWhisperModels, pullOllamaModel } from "./api";
 import type { RecordingState } from "./api";
-import type { ToolStatus } from "./api";
+import type { ToolStatus, ModelSettings, OllamaModelInfo, WhisperModelInfo } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsPanel } from "./SettingsPanel";
+import type { PullProgress } from "./SettingsPanel";
 
 interface PanelState {
   id: string;
@@ -70,6 +71,10 @@ export default function App() {
   const [processingProgressByPanel, setProcessingProgressByPanel] = useState<Record<string, string>>({});
   const [processingProgressByNote, setProcessingProgressByNote] = useState<Record<string, string>>({});
   const [recordingDevice, setRecordingDevice] = useState<string | null>(() => localStorage.getItem("recording-device"));
+  const [modelSettings, setModelSettings] = useState<ModelSettings>({ keyword_model: null, summary_model: null, whisper_model: null });
+  const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
+  const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
+  const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
   const [recordingPanelId, setRecordingPanelId] = useState<string | null>(null);
   const pendingRecordingPanelRef = useRef<string | null>(null);
   const pendingRecordingPanelsByNoteRef = useRef<Map<string, string>>(new Map());
@@ -108,6 +113,52 @@ export default function App() {
       localStorage.removeItem("recording-device");
     }
   }, []);
+
+  const fetchModelData = useCallback(async () => {
+    try {
+      const [settings, ollama, whisper] = await Promise.all([
+        getModelSettings(),
+        listOllamaModels(),
+        listWhisperModels(),
+      ]);
+      setModelSettings(settings);
+      setOllamaModels(ollama);
+      setWhisperModels(whisper);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleModelSettingsChange = useCallback(async (settings: ModelSettings) => {
+    setModelSettings(settings);
+    try {
+      await setModelSettingsApi(settings);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handlePullModel = useCallback(async (name: string) => {
+    try {
+      await pullOllamaModel(name);
+    } finally {
+      setPullProgress(null);
+    }
+    // Refresh model list after install.
+    try {
+      const ollama = await listOllamaModels();
+      setOllamaModels(ollama);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Fetch model data when settings panel opens
+  useEffect(() => {
+    if (showSettings) {
+      void fetchModelData();
+    }
+  }, [showSettings, fetchModelData]);
 
   // Persist vim mode
   useEffect(() => {
@@ -191,6 +242,7 @@ export default function App() {
     let unlistenRecProgress: (() => void) | undefined;
     let unlistenRecComplete: (() => void) | undefined;
     let unlistenRecError: (() => void) | undefined;
+    let unlistenPullProgress: (() => void) | undefined;
 
     (async () => {
       try {
@@ -365,6 +417,14 @@ export default function App() {
           pendingRecordingPanelRef.current = null;
         });
 
+        unlistenPullProgress = await listen<{ model: string; status: string; completed: number | null; total: number | null }>("ollama-pull-progress", (event) => {
+          const { model, status, completed, total } = event.payload;
+          const percent = completed != null && total != null && total > 0
+            ? Math.round((completed / total) * 100)
+            : null;
+          setPullProgress({ model, status, percent });
+        });
+
         // Resume any pending recording jobs from a previous session.
         void checkPendingJobs();
       } catch {
@@ -381,6 +441,7 @@ export default function App() {
       unlistenRecProgress?.();
       unlistenRecComplete?.();
       unlistenRecError?.();
+      unlistenPullProgress?.();
     };
   }, [refreshSharedState]);
 
@@ -1254,6 +1315,12 @@ export default function App() {
             } catch { /* ignore */ }
           }}
           onClose={() => setShowSettings(false)}
+          modelSettings={modelSettings}
+          ollamaModels={ollamaModels}
+          whisperModels={whisperModels}
+          onModelSettingsChange={handleModelSettingsChange}
+          onPullModel={handlePullModel}
+          pullProgress={pullProgress}
         />,
         document.body,
       )}

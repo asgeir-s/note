@@ -7,8 +7,35 @@ use git_sync::GitSyncHandle;
 use notes::{NoteIndex, NoteMetadata};
 use qmd::QmdHandle;
 use recording::RecordingHandle;
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::{Manager, RunEvent, State};
+use tauri::{Emitter, Manager, RunEvent, State};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelSettings {
+    pub keyword_model: Option<String>,
+    pub summary_model: Option<String>,
+    pub whisper_model: Option<String>,
+}
+
+fn model_settings_path(notes_dir: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(notes_dir).join(".dump-models.json")
+}
+
+fn load_model_settings(notes_dir: &str) -> ModelSettings {
+    let path = model_settings_path(notes_dir);
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_model_settings(notes_dir: &str, settings: &ModelSettings) {
+    let path = model_settings_path(notes_dir);
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = std::fs::write(path, json);
+    }
+}
 
 pub struct AppState {
     pub notes_dir: Mutex<String>,
@@ -16,6 +43,7 @@ pub struct AppState {
     pub git: Mutex<GitSyncHandle>,
     pub qmd: Mutex<QmdHandle>,
     pub recording: Mutex<RecordingHandle>,
+    pub model_settings: Mutex<ModelSettings>,
 }
 
 #[tauri::command]
@@ -66,8 +94,15 @@ fn set_notes_dir(
     let mut git = state.git.lock().map_err(|e| e.to_string())?;
     *git = new_git;
 
+    // Reload model settings for new directory.
+    let new_model_settings = load_model_settings(&path);
+    {
+        let mut ms = state.model_settings.lock().map_err(|e| e.to_string())?;
+        *ms = new_model_settings.clone();
+    }
+
     // Start a new qmd worker for the new directory.
-    let new_qmd = QmdHandle::new(&path, app_handle.clone());
+    let new_qmd = QmdHandle::new(&path, app_handle.clone(), new_model_settings.keyword_model);
     let mut qmd = state.qmd.lock().map_err(|e| e.to_string())?;
     *qmd = new_qmd;
 
@@ -211,7 +246,8 @@ fn start_recording(state: State<AppState>, device: Option<String>, note_id: Opti
     }
     let note_id = note_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
-    rec.start(&note_id, &notes_dir, device);
+    let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
+    rec.start(&note_id, &notes_dir, device, ms.summary_model.clone(), ms.whisper_model.clone());
     Ok(note_id)
 }
 
@@ -266,6 +302,209 @@ async fn check_pending_jobs(state: State<'_, AppState>, app_handle: tauri::AppHa
     Ok(())
 }
 
+#[tauri::command]
+fn get_model_settings(state: State<AppState>) -> Result<ModelSettings, String> {
+    let settings = state.model_settings.lock().map_err(|e| e.to_string())?;
+    Ok(settings.clone())
+}
+
+#[tauri::command]
+fn set_model_settings(state: State<AppState>, settings: ModelSettings) -> Result<(), String> {
+    let notes_dir = state.notes_dir.lock().map_err(|e| e.to_string())?.clone();
+    save_model_settings(&notes_dir, &settings);
+    let mut current = state.model_settings.lock().map_err(|e| e.to_string())?;
+    *current = settings;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OllamaModelInfo {
+    pub name: String,
+    pub size_bytes: Option<u64>,
+    pub installed: bool,
+    pub parameter_size: Option<String>,
+}
+
+#[tauri::command]
+async fn list_ollama_models() -> Result<Vec<OllamaModelInfo>, String> {
+    let mut models: Vec<OllamaModelInfo> = Vec::new();
+    let mut installed_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Query ollama REST API for installed models.
+    if let Ok(resp) = reqwest::get("http://localhost:11434/api/tags").await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(arr) = json.get("models").and_then(|v| v.as_array()) {
+                for m in arr {
+                    let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let size = m.get("size").and_then(|v| v.as_u64());
+                    let param_size = m.get("details")
+                        .and_then(|d| d.get("parameter_size"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    if !name.is_empty() {
+                        installed_names.insert(name.clone());
+                        models.push(OllamaModelInfo {
+                            name,
+                            size_bytes: size,
+                            installed: true,
+                            parameter_size: param_size,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Add recommended models that aren't installed.
+    let recommended = [
+        ("llama3.2", "2.0B", 2_000_000_000u64),
+        ("mistral", "7.2B", 4_100_000_000),
+        ("qwen2.5:7b", "7.6B", 4_700_000_000),
+        ("qwen2.5:1.5b", "1.5B", 986_000_000),
+        ("gemma2:2b", "2.6B", 1_600_000_000),
+        ("phi3:mini", "3.8B", 2_300_000_000),
+    ];
+    for (name, param, approx_size) in recommended {
+        if !installed_names.contains(name) {
+            models.push(OllamaModelInfo {
+                name: name.to_string(),
+                size_bytes: Some(approx_size),
+                installed: false,
+                parameter_size: Some(param.to_string()),
+            });
+        }
+    }
+
+    Ok(models)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WhisperModelInfo {
+    pub name: String,
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+async fn list_whisper_models() -> Result<Vec<WhisperModelInfo>, String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
+    let search_dirs = [
+        format!("{home}/.local/share/whisper-cpp/models"),
+        format!("{home}/whisper.cpp/models"),
+        "/opt/homebrew/share/whisper-cpp/models".to_string(),
+        format!("{home}/Library/Application Support/com.pais.handy/models"),
+    ];
+
+    let mut models = Vec::new();
+    for dir in &search_dirs {
+        let dir_path = std::path::Path::new(dir);
+        if !dir_path.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "bin").unwrap_or(false) {
+                    let name = path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    let path_str = path.to_string_lossy().to_string();
+                    models.push(WhisperModelInfo { name, path: path_str, size_bytes: size });
+                }
+            }
+        }
+    }
+
+    // Sort by size descending (larger = better quality).
+    models.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    Ok(models)
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OllamaPullProgress {
+    model: String,
+    status: String,
+    completed: Option<u64>,
+    total: Option<u64>,
+}
+
+#[tauri::command]
+async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("http://localhost:11434/api/pull")
+        .json(&serde_json::json!({ "name": &name }))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to ollama: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("ollama pull failed: HTTP {}", resp.status()));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream error: {e}"))?;
+        buf.extend_from_slice(&chunk);
+
+        // Process complete NDJSON lines
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let completed = json.get("completed").and_then(|v| v.as_u64());
+                let total = json.get("total").and_then(|v| v.as_u64());
+
+                if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
+                    return Err(format!("ollama pull failed: {error}"));
+                }
+
+                let _ = app_handle.emit("ollama-pull-progress", OllamaPullProgress {
+                    model: name.clone(),
+                    status: status.clone(),
+                    completed,
+                    total,
+                });
+            }
+        }
+    }
+
+    // Process any remaining data in buffer
+    if !buf.is_empty() {
+        let line = String::from_utf8_lossy(&buf);
+        let line = line.trim();
+        if !line.is_empty() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
+                    return Err(format!("ollama pull failed: {error}"));
+                }
+                let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let completed = json.get("completed").and_then(|v| v.as_u64());
+                let total = json.get("total").and_then(|v| v.as_u64());
+                let _ = app_handle.emit("ollama-pull-progress", OllamaPullProgress {
+                    model: name.clone(),
+                    status,
+                    completed,
+                    total,
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let home = dirs_home();
@@ -278,8 +517,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let handle = app.handle().clone();
+            let model_settings = load_model_settings(&default_dir);
             let git = GitSyncHandle::new(&default_dir, handle.clone());
-            let qmd = QmdHandle::new(&default_dir, handle.clone());
+            let qmd = QmdHandle::new(&default_dir, handle.clone(), model_settings.keyword_model.clone());
             let rec = RecordingHandle::new(handle);
             app.manage(AppState {
                 notes_dir: Mutex::new(default_dir),
@@ -287,6 +527,7 @@ pub fn run() {
                 git: Mutex::new(git),
                 qmd: Mutex::new(qmd),
                 recording: Mutex::new(rec),
+                model_settings: Mutex::new(model_settings),
             });
             Ok(())
         })
@@ -314,6 +555,11 @@ pub fn run() {
             stop_recording,
             get_recording_state,
             check_pending_jobs,
+            get_model_settings,
+            set_model_settings,
+            list_ollama_models,
+            list_whisper_models,
+            pull_ollama_model,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

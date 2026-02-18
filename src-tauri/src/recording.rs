@@ -140,6 +140,8 @@ enum Msg {
         note_id: String,
         notes_dir: String,
         preferred_device: Option<String>,
+        summary_model: Option<String>,
+        whisper_model: Option<String>,
     },
     Stop,
     Shutdown,
@@ -179,11 +181,13 @@ impl RecordingHandle {
         }
     }
 
-    pub fn start(&self, note_id: &str, notes_dir: &str, preferred_device: Option<String>) {
+    pub fn start(&self, note_id: &str, notes_dir: &str, preferred_device: Option<String>, summary_model: Option<String>, whisper_model: Option<String>) {
         let _ = self.tx.send(Msg::Start {
             note_id: note_id.to_string(),
             notes_dir: notes_dir.to_string(),
             preferred_device,
+            summary_model,
+            whisper_model,
         });
     }
 
@@ -215,7 +219,7 @@ async fn run_worker(
 ) {
     loop {
         match rx.recv().await {
-            Some(Msg::Start { note_id, notes_dir, preferred_device }) => {
+            Some(Msg::Start { note_id, notes_dir, preferred_device, summary_model, whisper_model }) => {
                 let audio_dir = PathBuf::from(&notes_dir).join("meetings/.audio");
                 if let Err(e) = std::fs::create_dir_all(&audio_dir) {
                     eprintln!("recording: failed to create audio dir: {e}");
@@ -329,8 +333,10 @@ async fn run_worker(
                             // Run post-processing in the background so the worker can
                             // accept a new recording immediately.
                             let app_handle_clone = app_handle.clone();
+                            let sm = summary_model.clone();
+                            let wm = whisper_model.clone();
                             tauri::async_runtime::spawn(async move {
-                                process_recording(&app_handle_clone, &mut job).await;
+                                process_recording(&app_handle_clone, &mut job, sm.as_deref(), wm.as_deref()).await;
                             });
 
                             if let Ok(mut slot) = note_id_slot.lock() {
@@ -765,6 +771,8 @@ fn record_device_inner(
 async fn process_recording(
     app_handle: &tauri::AppHandle,
     job: &mut RecordingJob,
+    summary_model_override: Option<&str>,
+    whisper_model_override: Option<&str>,
 ) {
     let mic_path = PathBuf::from(&job.mic_path);
     let system_path = PathBuf::from(&job.system_path);
@@ -811,7 +819,7 @@ async fn process_recording(
             eprintln!("recording: transcript already available, skipping");
         } else {
             emit_progress(app_handle, &job.note_id, "transcribing", "Transcribing audio...");
-            let transcript = transcribe(&final_wav).await;
+            let transcript = transcribe(&final_wav, whisper_model_override).await;
 
             match transcript {
                 Ok(t) => {
@@ -851,7 +859,7 @@ async fn process_recording(
             eprintln!("recording: summary already available, skipping");
         } else {
             emit_progress(app_handle, &job.note_id, "summarizing", "Summarizing transcript...");
-            let summary = summarize(&transcript_text).await.unwrap_or_else(|e| {
+            let summary = summarize(&transcript_text, summary_model_override).await.unwrap_or_else(|e| {
                 eprintln!("recording: summarization failed: {e}");
                 "*Summary unavailable — ollama not reachable.*".to_string()
             });
@@ -957,14 +965,34 @@ async fn convert_mono(input: &Path, output: &Path) -> Result<(), String> {
 
 // ── Transcription ───────────────────────────────────────────────────
 
-async fn find_whisper_model() -> Option<PathBuf> {
+fn whisper_search_dirs() -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
-    let search_dirs = [
+    vec![
         format!("{home}/.local/share/whisper-cpp/models"),
         format!("{home}/whisper.cpp/models"),
         "/opt/homebrew/share/whisper-cpp/models".to_string(),
         format!("{home}/Library/Application Support/com.pais.handy/models"),
-    ];
+    ]
+}
+
+async fn find_whisper_model(override_name: Option<&str>) -> Option<PathBuf> {
+    let search_dirs = whisper_search_dirs();
+
+    // If user selected a specific model, find it by filename.
+    if let Some(name) = override_name {
+        for dir in &search_dirs {
+            let candidate = Path::new(dir).join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        // Try as absolute path.
+        let p = PathBuf::from(name);
+        if p.exists() {
+            return Some(p);
+        }
+        eprintln!("recording: configured whisper model '{name}' not found, falling back to auto");
+    }
 
     let preferred = [
         "ggml-large-v3-turbo.bin",
@@ -1006,8 +1034,8 @@ async fn find_whisper_model() -> Option<PathBuf> {
     None
 }
 
-async fn transcribe(wav_path: &Path) -> Result<String, String> {
-    let model = find_whisper_model()
+async fn transcribe(wav_path: &Path, whisper_model_override: Option<&str>) -> Result<String, String> {
+    let model = find_whisper_model(whisper_model_override)
         .await
         .ok_or_else(|| "No whisper model found. Download a ggml model.".to_string())?;
 
@@ -1116,7 +1144,18 @@ fn format_timestamp(ts: &str) -> String {
 
 // ── Summarization ───────────────────────────────────────────────────
 
-async fn find_ollama_model() -> Option<String> {
+async fn find_ollama_model(override_model: Option<&str>) -> Option<String> {
+    // If user selected a specific model, verify it exists.
+    if let Some(name) = override_model {
+        let out = cmd("ollama").args(["show", name]).output().await;
+        if let Ok(o) = out {
+            if o.status.success() {
+                return Some(name.to_string());
+            }
+        }
+        eprintln!("recording: configured summary model '{name}' not available, falling back to auto");
+    }
+
     let candidates = ["llama3.2", "mistral", "qwen2.5:7b", "qwen2.5:1.5b"];
     for model in &candidates {
         let out = cmd("ollama")
@@ -1132,8 +1171,8 @@ async fn find_ollama_model() -> Option<String> {
     None
 }
 
-async fn summarize(transcript: &str) -> Result<String, String> {
-    let model = find_ollama_model()
+async fn summarize(transcript: &str, summary_model_override: Option<&str>) -> Result<String, String> {
+    let model = find_ollama_model(summary_model_override)
         .await
         .ok_or_else(|| "No ollama model available".to_string())?;
 
@@ -1262,7 +1301,8 @@ pub async fn resume_pending_jobs(app_handle: &tauri::AppHandle, notes_dir: &str)
         }
 
         emit_progress(app_handle, &job.note_id, "resuming", "Resuming processing...");
-        process_recording(app_handle, &mut job).await;
+        // Resumed jobs use auto-detect (no model override persisted in job file).
+        process_recording(app_handle, &mut job, None, None).await;
     }
 }
 
