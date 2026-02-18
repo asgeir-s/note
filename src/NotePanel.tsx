@@ -11,12 +11,14 @@ import { Editor } from "./Editor";
 import { MarkdownView } from "./MarkdownView";
 import { NotesList } from "./NotesList";
 import { TagInput } from "./TagInput";
+import type { TagInputHandle } from "./TagInput";
 import {
   saveNote,
   getNote,
   deleteNote,
   toggleStar,
   getRelatedNotes,
+  regenerateTags,
 } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 
@@ -77,19 +79,24 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     ref,
   ) => {
     const [content, setContent] = useState("");
+    const [title, setTitle] = useState("");
     const [loadedNoteId, setLoadedNoteId] = useState<string | null>(null);
     const [tags, setTags] = useState<string[]>([]);
     const [showTagInput, setShowTagInput] = useState(false);
     const [precomputedRelated, setPrecomputedRelated] = useState<NoteMetadata[]>([]);
+    const [regeneratingTags, setRegeneratingTags] = useState(false);
+    const [relatedLoading, setRelatedLoading] = useState(false);
     const [userModified, setUserModified] = useState(independent ?? false);
     const [highlightIndex, setHighlightIndex] = useState(-1);
     const [starred, setStarred] = useState(false);
     const editorRef = useRef<{ focus: () => void; blur: () => void; clear: () => void } | null>(
       null,
     );
+    const tagInputRef = useRef<TagInputHandle>(null);
     const initialLoadDone = useRef(false);
     const historyRef = useRef<(string | null)[]>([]);
     const loadedNoteIdRef = useRef<string | null>(null);
+    const savedTagsRef = useRef<string[]>([]);
 
     const editing = userModified || !loadedNoteId;
     const isTyping = editing && content.trim().length > 0;
@@ -105,9 +112,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
           const note = await getNote(noteId);
           setContent(note.content);
+          setTitle(note.title);
           setLoadedNoteId(note.id);
           loadedNoteIdRef.current = note.id;
           setTags(note.tags);
+          savedTagsRef.current = note.tags;
           setStarred(note.starred);
           setUserModified(false);
         } catch (e) {
@@ -126,9 +135,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
 
     const clearPanel = useCallback(() => {
       setContent("");
+      setTitle("");
       setLoadedNoteId(null);
       loadedNoteIdRef.current = null;
       setTags([]);
+      savedTagsRef.current = [];
       setStarred(false);
       setPrecomputedRelated([]);
       setShowTagInput(false);
@@ -140,10 +151,17 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const handleSave = useCallback(async () => {
       if (!content.trim()) return;
       try {
-        const meta = await saveNote(loadedNoteId, content, tags);
+        const isNew = !loadedNoteId;
+        const tagsChanged = isNew || JSON.stringify(tags) !== JSON.stringify(savedTagsRef.current);
+        const meta = await saveNote(loadedNoteId, content, tags, title || null);
+        setTitle(meta.title);
         setLoadedNoteId(meta.id);
         loadedNoteIdRef.current = meta.id;
+        savedTagsRef.current = tags;
         setUserModified(false);
+        if (tagsChanged) {
+          setRelatedLoading(true);
+        }
         await onSaved();
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
@@ -151,7 +169,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       } catch (e) {
         console.error("Failed to save note:", e);
       }
-    }, [content, loadedNoteId, tags, onSaved]);
+    }, [content, title, loadedNoteId, tags, onSaved]);
 
     const displayedNotes = useMemo(() => {
       // Existing note (viewing or editing) — show precomputed related
@@ -204,7 +222,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           const prevId = historyRef.current.pop()!;
           if (userModified && content.trim()) {
             try {
-              await saveNote(loadedNoteId, content, tags);
+              await saveNote(loadedNoteId, content, tags, title || null);
               await onSaved();
             } catch (e) {
               console.error("Failed to save note:", e);
@@ -267,7 +285,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
         },
       }),
-      [loadNote, loadNoteInternal, clearPanel, handleSave, userModified, loadedNoteId, content, tags, onSaved, displayedNotes, highlightIndex, onNoteClick],
+      [loadNote, loadNoteInternal, clearPanel, handleSave, userModified, loadedNoteId, content, title, tags, onSaved, displayedNotes, highlightIndex, onNoteClick],
     );
 
     // Load initial note on mount
@@ -286,38 +304,52 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         return;
       }
       let cancelled = false;
+      setRelatedLoading(true);
       getRelatedNotes(loadedNoteId).then((results) => {
-        if (!cancelled) setPrecomputedRelated(results);
+        if (!cancelled) {
+          setPrecomputedRelated(results);
+          if (results.length > 0) setRelatedLoading(false);
+        }
       }).catch(() => {
-        if (!cancelled) setPrecomputedRelated([]);
+        if (!cancelled) {
+          setPrecomputedRelated([]);
+          setRelatedLoading(false);
+        }
       });
       return () => { cancelled = true; };
     }, [loadedNoteId]);
 
-    // Listen for backend related-notes-changed event.
+    // Listen for backend QMD events.
     useEffect(() => {
-      let cleanup: (() => void) | undefined;
+      let cleanups: (() => void)[] = [];
       let cancelled = false;
       import("@tauri-apps/api/event").then(({ listen }) => {
         if (cancelled) return;
+        listen<string[]>("qmd-processing", (event) => {
+          const currentId = loadedNoteIdRef.current;
+          if (currentId && event.payload.includes(currentId)) {
+            setRelatedLoading(true);
+          }
+        }).then((unlisten) => {
+          if (cancelled) unlisten(); else cleanups.push(unlisten);
+        });
         listen("related-notes-changed", () => {
           const currentId = loadedNoteIdRef.current;
           if (currentId) {
             getRelatedNotes(currentId).then((results) => {
               setPrecomputedRelated(results);
-            }).catch(() => {});
+              setRelatedLoading(false);
+            }).catch(() => {
+              setRelatedLoading(false);
+            });
           }
         }).then((unlisten) => {
-          if (cancelled) {
-            unlisten();
-          } else {
-            cleanup = unlisten;
-          }
+          if (cancelled) unlisten(); else cleanups.push(unlisten);
         });
       }).catch(() => {});
       return () => {
         cancelled = true;
-        cleanup?.();
+        cleanups.forEach((fn) => fn());
       };
     }, []);
 
@@ -338,6 +370,20 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       requestAnimationFrame(() => editorRef.current?.focus());
     }, []);
 
+    const handleRegenerateTags = useCallback(async () => {
+      if (!loadedNoteId || regeneratingTags) return;
+      setRegeneratingTags(true);
+      try {
+        const updated = await regenerateTags(loadedNoteId);
+        setTags(updated.tags);
+        await onSaved();
+      } catch (e) {
+        console.error("Failed to regenerate tags:", e);
+      } finally {
+        setRegeneratingTags(false);
+      }
+    }, [loadedNoteId, regeneratingTags, onSaved]);
+
     const listLabel = loadedNoteId ? "Related" : "Recent";
 
     // Reset highlight when notes list changes
@@ -351,7 +397,60 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         onPointerDown={onFocus}
       >
         {showTagInput && (
-          <TagInput tags={tags} allTags={allTags} onChange={setTags} />
+          <div className="metadata-panel" onKeyDown={async (e) => {
+            if (e.key === "Enter" && e.metaKey) {
+              e.preventDefault();
+              const pending = tagInputRef.current?.flush();
+              setShowTagInput(false);
+              if (pending) {
+                // flush() updates React state (async), but handleSave
+                // captures the old tags.  Save directly with the
+                // updated tag list.
+                const updatedTags = tags.includes(pending) ? tags : [...tags, pending];
+                setTags(updatedTags);
+                if (!content.trim()) return;
+                try {
+                  const meta = await saveNote(loadedNoteId, content, updatedTags, title || null);
+                  setTitle(meta.title);
+                  setLoadedNoteId(meta.id);
+                  loadedNoteIdRef.current = meta.id;
+                  savedTagsRef.current = updatedTags;
+                  setUserModified(false);
+                  setRelatedLoading(true);
+                  await onSaved();
+                  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+                } catch (err) {
+                  console.error("Failed to save note:", err);
+                }
+              } else {
+                handleSave();
+              }
+            }
+          }}>
+            <input
+              className="title-input"
+              type="text"
+              placeholder="Title..."
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setUserModified(true);
+              }}
+            />
+            <div className="tag-row">
+              <TagInput ref={tagInputRef} tags={tags} allTags={allTags} onChange={setTags} />
+              {loadedNoteId && (
+                <button
+                  className="regenerate-tags-btn"
+                  onClick={handleRegenerateTags}
+                  disabled={regeneratingTags}
+                  title="Regenerate tags from content"
+                >
+                  {regeneratingTags ? "..." : "↻"}
+                </button>
+              )}
+            </div>
+          </div>
         )}
         <div className="panel-indicators">
           <div
@@ -380,6 +479,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         <NotesList
           notes={displayedNotes}
           label={listLabel}
+          loading={loadedNoteId ? relatedLoading : false}
           onOpenNote={handleNoteClick}
           highlightIndex={highlightIndex}
           sortBy={sortBy}

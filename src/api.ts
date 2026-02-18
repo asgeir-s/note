@@ -41,19 +41,20 @@ export async function saveNote(
   id: string | null,
   content: string,
   tags: string[],
+  title?: string | null,
 ): Promise<NoteMetadata> {
   if (isTauri()) {
-    return invoke<NoteMetadata>("save_note", { id, content, tags });
+    return invoke<NoteMetadata>("save_note", { id, content, tags, title: title ?? null });
   }
   // Fallback for web dev
   const noteId = id ?? generateId();
-  const title = extractTitle(content);
+  const resolvedTitle = title ?? extractTitle(content);
   const now = new Date().toISOString();
   const existing = memoryNotes.get(noteId);
   const meta: NoteMetadata = {
     id: noteId,
     path: `${noteId}.md`,
-    title,
+    title: resolvedTitle,
     created: existing?.meta.created ?? now,
     modified: now,
     tags,
@@ -262,6 +263,13 @@ export async function checkTools(): Promise<ToolStatus> {
     return invoke<ToolStatus>("check_tools");
   }
   return { git: false, qmd: false, ollama: false };
+}
+
+export async function regenerateTags(id: string): Promise<NoteMetadata> {
+  if (isTauri()) {
+    return invoke<NoteMetadata>("regenerate_tags", { id });
+  }
+  throw new Error("Regenerate tags is only available in the desktop app");
 }
 
 export async function getRelatedNotes(id: string): Promise<NoteMetadata[]> {

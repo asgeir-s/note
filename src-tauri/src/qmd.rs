@@ -290,6 +290,9 @@ async fn process_pending(
 
     let items: Vec<(String, String)> = pending.drain().collect();
 
+    let processing_ids: Vec<&str> = items.iter().map(|(id, _)| id.as_str()).collect();
+    let _ = app_handle.emit("qmd-processing", processing_ids);
+
     // Advance the generation counter — any cached entry with an older gen is stale.
     {
         let mut c = cache.write().await;
@@ -298,10 +301,37 @@ async fn process_pending(
     }
 
     // Build maps from the note index.
-    let (path_to_id, id_to_path) = build_maps(app_handle);
+    let (path_to_id, id_to_path, id_to_tags, id_to_title) = build_maps(app_handle);
+
+    let mut did_auto_tag = false;
 
     for (note_id, title) in &items {
-        let query_text = build_query(dir, title, id_to_path.get(note_id), has_ollama).await;
+        let note_tags = id_to_tags.get(note_id).cloned().unwrap_or_default();
+        let (query_text, keywords) = build_query(dir, title, id_to_path.get(note_id), &note_tags, has_ollama).await;
+
+        // Auto-tag notes that have no tags
+        if let Some(ref kw) = keywords {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                let applied = {
+                    let notes_dir = state.notes_dir.lock().ok();
+                    let mut index = state.index.lock().ok();
+                    match (notes_dir, index.as_mut()) {
+                        (Some(dir), Some(idx)) => {
+                            crate::notes::set_auto_tags(&dir, note_id, kw, idx, false).ok().flatten()
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some(meta) = applied {
+                    eprintln!("qmd: auto-tagged '{}' with {:?}", &note_id[..8.min(note_id.len())], kw);
+                    if let Ok(git) = state.git.lock() {
+                        git.notify_change(&meta.path, &meta.title, false);
+                    }
+                    did_auto_tag = true;
+                }
+            }
+        }
+
         if query_text.trim().is_empty() {
             continue;
         }
@@ -309,13 +339,14 @@ async fn process_pending(
 
         match qmd(dir, &["query", &query_text, "--json", "-n", "10", "--min-score", "0.35"]).await {
             Ok(output) => {
-                let json_preview = extract_json(&output).unwrap_or("(no JSON)");
-                let preview_len = json_preview.len().min(200);
-                eprintln!("qmd: raw for '{}': {}", &note_id[..8.min(note_id.len())], &json_preview[..preview_len]);
                 let mut entries = parse_qmd_results(&output, &path_to_id, note_id);
                 entries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-                eprintln!("qmd: results for '{}': {} matches{}", &note_id[..8.min(note_id.len())], entries.len(),
-                    entries.iter().take(5).map(|e| format!(" {:.2}={}", e.score, &e.id[..8.min(e.id.len())])).collect::<String>());
+                let source_title = id_to_title.get(note_id).map(|s| s.as_str()).unwrap_or("?");
+                eprintln!("qmd: results for '{}' ({}):", &note_id[..8.min(note_id.len())], source_title);
+                for e in &entries {
+                    let t = id_to_title.get(&e.id).map(|s| s.as_str()).unwrap_or("?");
+                    eprintln!("qmd:   {:.2}  {}", e.score, t);
+                }
                 let mut c = cache.write().await;
                 let gen = c.generation;
                 c.relations.insert(note_id.clone(), CacheEntry { gen, entries });
@@ -328,6 +359,11 @@ async fn process_pending(
 
     let c = cache.read().await;
     save_cache(cache_path, &c);
+    // Emit notes-changed once after all auto-tagging is done (not per-note)
+    // to avoid triggering cascading frontend refreshes during processing.
+    if did_auto_tag {
+        let _ = app_handle.emit("notes-changed", ());
+    }
     let _ = app_handle.emit("related-notes-changed", ());
 }
 
@@ -352,14 +388,31 @@ fn normalize_filename(s: &str) -> String {
     out
 }
 
-fn build_maps(app_handle: &tauri::AppHandle) -> (HashMap<String, String>, HashMap<String, String>) {
+/// Canonicalize a note stem for resilient matching across separators/punctuation.
+/// Example: `my_note-title!.md` -> `mynotetitle`
+fn canonical_stem(s: &str) -> String {
+    let stem = Path::new(s)
+        .file_stem()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_else(|| s.to_string());
+    stem.chars()
+        .flat_map(|c| c.to_lowercase())
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
+fn build_maps(app_handle: &tauri::AppHandle) -> (HashMap<String, String>, HashMap<String, String>, HashMap<String, Vec<String>>, HashMap<String, String>) {
     let mut path_to_id = HashMap::new();
     let mut id_to_path = HashMap::new();
+    let mut id_to_tags = HashMap::new();
+    let mut id_to_title = HashMap::new();
     if let Some(state) = app_handle.try_state::<AppState>() {
         if let Ok(index) = state.index.lock() {
             for (id, meta) in &index.notes {
                 path_to_id.insert(meta.path.clone(), id.clone());
                 id_to_path.insert(id.clone(), meta.path.clone());
+                id_to_tags.insert(id.clone(), meta.tags.clone());
+                id_to_title.insert(id.clone(), meta.title.clone());
                 if let Some(fname) = Path::new(&meta.path).file_name() {
                     let fname_str = fname.to_string_lossy().to_string();
                     path_to_id.insert(fname_str.clone(), id.clone());
@@ -377,13 +430,23 @@ fn build_maps(app_handle: &tauri::AppHandle) -> (HashMap<String, String>, HashMa
     } else {
         eprintln!("qmd: build_maps: no AppState available");
     }
-    (path_to_id, id_to_path)
+    (path_to_id, id_to_path, id_to_tags, id_to_title)
 }
 
-/// Build a search query by asking ollama to extract key topics, falling back to title only.
-async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, has_ollama: bool) -> String {
+/// Build a search query for finding related notes.
+/// If the note already has tags, uses them directly (no ollama call).
+/// Otherwise asks ollama to extract keywords from content.
+/// Returns (query_string, parsed_keywords) — keywords are only Some when ollama was called
+/// (used for auto-tagging notes that have no tags).
+async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, tags: &[String], has_ollama: bool) -> (String, Option<Vec<String>>) {
+    // If the note already has tags, use them as the query — no need for ollama.
+    if !tags.is_empty() {
+        let tag_str = tags.join(", ");
+        return (tag_str, None);
+    }
+
     if !has_ollama {
-        return title.to_string();
+        return (title.to_string(), None);
     }
     if let Some(path) = rel_path {
         let full_path = dir.join(path);
@@ -393,12 +456,17 @@ async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, has_oll
             let truncated: String = body.chars().take(2000).collect();
             if truncated.trim().len() > 20 {
                 if let Some(keywords) = ollama_extract_keywords(&truncated).await {
-                    return format!("{} {}", title, keywords);
+                    let parsed: Vec<String> = keywords
+                        .split(',')
+                        .map(|k| k.trim().to_lowercase())
+                        .filter(|k| !k.is_empty())
+                        .collect();
+                    return (keywords, Some(parsed));
                 }
             }
         }
     }
-    title.to_string()
+    (title.to_string(), None)
 }
 
 fn strip_frontmatter(content: &str) -> &str {
@@ -602,6 +670,8 @@ fn extract_id_from_snippet(snippet: &str) -> Option<String> {
 }
 
 fn resolve_path_to_id(path_str: &str, path_to_id: &HashMap<String, String>) -> Option<String> {
+    let path_str = path_str.trim();
+
     // Direct match.
     if let Some(id) = path_to_id.get(path_str) {
         return Some(id.clone());
@@ -609,6 +679,7 @@ fn resolve_path_to_id(path_str: &str, path_to_id: &HashMap<String, String>) -> O
 
     // Strip qmd:// URI scheme (e.g. "qmd://notes/filename.md" → "filename.md").
     let stripped = if let Some(rest) = path_str.strip_prefix("qmd://") {
+        let rest = rest.trim_start_matches('/');
         // Skip the collection name segment.
         rest.find('/').map(|i| &rest[i + 1..]).unwrap_or(rest)
     } else {
@@ -618,6 +689,62 @@ fn resolve_path_to_id(path_str: &str, path_to_id: &HashMap<String, String>) -> O
     if stripped != path_str {
         if let Some(id) = path_to_id.get(stripped) {
             return Some(id.clone());
+        }
+    }
+
+    // Handle chunked qmd paths like "notename/chunkid.md" or
+    // "subdir/notename/chunkid.md".
+    if let Some((source_path, _chunk)) = stripped.rsplit_once('/') {
+        let mut tried: Vec<String> = Vec::new();
+
+        let source_file = if source_path.ends_with(".md") {
+            source_path.to_string()
+        } else {
+            format!("{source_path}.md")
+        };
+        tried.push(source_file.clone());
+        let normalized = normalize_filename(&source_file);
+        if normalized != source_file {
+            tried.push(normalized);
+        }
+
+        if let Some(base_name) = Path::new(&source_file).file_name() {
+            let base_name = base_name.to_string_lossy().to_string();
+            tried.push(base_name.clone());
+            let normalized = normalize_filename(&base_name);
+            if normalized != base_name {
+                tried.push(normalized);
+            }
+        }
+
+        for candidate in tried {
+            if let Some(id) = path_to_id.get(&candidate) {
+                return Some(id.clone());
+            }
+        }
+
+        // Final fallback: canonical stem match, only when it uniquely maps to one ID.
+        let target = canonical_stem(source_path);
+        if !target.is_empty() {
+            let mut unique: Option<&String> = None;
+            let mut ambiguous = false;
+            for (k, id) in path_to_id {
+                if canonical_stem(k) == target {
+                    if let Some(existing) = unique {
+                        if existing != id {
+                            ambiguous = true;
+                            break;
+                        }
+                    } else {
+                        unique = Some(id);
+                    }
+                }
+            }
+            if !ambiguous {
+                if let Some(id) = unique {
+                    return Some(id.clone());
+                }
+            }
         }
     }
 
@@ -632,9 +759,38 @@ fn resolve_path_to_id(path_str: &str, path_to_id: &HashMap<String, String>) -> O
         if let Some(id) = path_to_id.get(&normalized) {
             return Some(id.clone());
         }
+
+        // Fallback for punctuation/spacing variants.
+        let target = canonical_stem(&fname_str);
+        if !target.is_empty() {
+            let mut unique: Option<&String> = None;
+            let mut ambiguous = false;
+            for (k, id) in path_to_id {
+                if canonical_stem(k) == target {
+                    if let Some(existing) = unique {
+                        if existing != id {
+                            ambiguous = true;
+                            break;
+                        }
+                    } else {
+                        unique = Some(id);
+                    }
+                }
+            }
+            if !ambiguous {
+                if let Some(id) = unique {
+                    return Some(id.clone());
+                }
+            }
+        }
     }
 
-    eprintln!("qmd: resolve FAILED for '{}' (stripped='{}')", path_str, stripped);
+    eprintln!(
+        "qmd: resolve FAILED for '{}' (stripped='{}', map_size={})",
+        path_str,
+        stripped,
+        path_to_id.len()
+    );
     None
 }
 
@@ -645,32 +801,17 @@ pub async fn get_related_notes(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Vec<crate::notes::NoteMetadata>, String> {
-    let (cache, tx) = {
+    let cache = {
         let qmd = state.qmd.lock().map_err(|e| e.to_string())?;
-        (qmd.cache.clone(), qmd.tx.clone())
+        qmd.cache.clone()
     };
 
-    let needs_query = {
-        let c = cache.read().await;
-        match c.relations.get(&id) {
-            None => true,                       // never queried
-            Some(e) => e.gen < c.generation,    // stale (new notes added since)
-        }
-    };
-
-    if needs_query {
-        let title = {
-            let index = state.index.lock().map_err(|e| e.to_string())?;
-            index.notes.get(&id).map(|m| m.title.clone())
-        };
-        if let Some(title) = title {
-            let _ = tx.send(Msg::NoteChanged {
-                id: id.clone(),
-                title,
-            });
-        }
-    }
-
+    // Return cached results only — notes are re-queried when they actually change
+    // (via notify_change on save), not on every read.  The previous approach of
+    // re-queuing "stale" entries here caused an infinite ping-pong loop when
+    // multiple panels were open: processing note A bumped the global generation,
+    // making note B stale, which triggered re-processing of B, bumping generation
+    // again and making A stale, ad infinitum.
     let entries = {
         let c = cache.read().await;
         c.relations.get(&id).map(|e| e.entries.clone()).unwrap_or_default()
@@ -684,6 +825,61 @@ pub async fn get_related_notes(
         }
     }
     Ok(results)
+}
+
+#[tauri::command]
+pub async fn regenerate_tags(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<crate::notes::NoteMetadata, String> {
+    // Read note content from disk
+    let (notes_dir, rel_path) = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let index = state.index.lock().map_err(|e| e.to_string())?;
+        let meta = index.notes.get(&id).ok_or("Note not found")?;
+        (dir.clone(), meta.path.clone())
+    };
+
+    let full_path = std::path::Path::new(&notes_dir).join(&rel_path);
+    let content = std::fs::read_to_string(&full_path).map_err(|e| e.to_string())?;
+    let body = strip_frontmatter(&content);
+    let truncated: String = body.chars().take(2000).collect();
+
+    if truncated.trim().len() <= 20 {
+        return Err("Note content too short for keyword extraction".into());
+    }
+
+    let keywords_str = ollama_extract_keywords(&truncated).await
+        .ok_or("Ollama keyword extraction failed")?;
+
+    let keywords: Vec<String> = keywords_str
+        .split(',')
+        .map(|k| k.trim().to_lowercase())
+        .filter(|k| !k.is_empty())
+        .collect();
+
+    if keywords.is_empty() {
+        return Err("No keywords extracted".into());
+    }
+
+    let meta = {
+        let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        crate::notes::set_auto_tags(&dir, &id, &keywords, &mut index, true)
+            .map_err(|e| e.to_string())?
+            .ok_or("Failed to apply tags")?
+    };
+
+    if let Ok(git) = state.git.lock() {
+        git.notify_change(&meta.path, &meta.title, false);
+    }
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_change(&id, &meta.title);
+    }
+    let _ = app_handle.emit("notes-changed", ());
+
+    Ok(meta)
 }
 
 #[derive(Clone, Serialize)]
@@ -708,4 +904,105 @@ pub async fn check_tools() -> ToolStatus {
     eprintln!("qmd: tool check — git={git}, qmd={qmd}, ollama={ollama}");
 
     ToolStatus { git, qmd, ollama }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_path_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn resolve_direct_path() {
+        let map = make_path_map(&[("notes/hello.md", "id1")]);
+        assert_eq!(resolve_path_to_id("notes/hello.md", &map), Some("id1".into()));
+    }
+
+    #[test]
+    fn resolve_qmd_uri() {
+        let map = make_path_map(&[("hello.md", "id1")]);
+        assert_eq!(resolve_path_to_id("qmd://notes/hello.md", &map), Some("id1".into()));
+    }
+
+    #[test]
+    fn resolve_chunked_qmd_path() {
+        // qmd chunks large docs: "qmd://notes/notename/chunkid.md"
+        // The directory part is the original filename (without .md).
+        let map = make_path_map(&[(
+            "20260217221315-dette-er-en-notat-som-jeg-skriver-note.md",
+            "7535072e",
+        )]);
+        assert_eq!(
+            resolve_path_to_id(
+                "qmd://notes/20260217221315-dette-er-en-notat-som-jeg-skriver-note/7535072e.md",
+                &map,
+            ),
+            Some("7535072e".into()),
+        );
+    }
+
+    #[test]
+    fn resolve_chunked_path_with_normalization() {
+        // build_maps stores both original and normalized filenames.
+        // Actual filename uses underscores; qmd path uses dashes.
+        let map = make_path_map(&[
+            ("20260217221315-dette_er_en_notat.md", "abc123"),
+            ("20260217221315-dette-er-en-notat.md", "abc123"), // normalized by build_maps
+        ]);
+        assert_eq!(
+            resolve_path_to_id(
+                "qmd://notes/20260217221315-dette-er-en-notat/chunk99.md",
+                &map,
+            ),
+            Some("abc123".into()),
+        );
+    }
+
+    #[test]
+    fn resolve_chunked_qmd_path_with_nested_source_path() {
+        let map = make_path_map(&[("archive/20260217221315-dette-er-en-notat.md", "id-nested")]);
+        assert_eq!(
+            resolve_path_to_id(
+                "qmd://notes/archive/20260217221315-dette-er-en-notat/chunk99.md",
+                &map,
+            ),
+            Some("id-nested".into()),
+        );
+    }
+
+    #[test]
+    fn resolve_chunked_qmd_path_with_canonical_stem_fallback() {
+        let map = make_path_map(&[("20260217221315-dette__er__en__notat!!.md", "id1")]);
+        assert_eq!(
+            resolve_path_to_id(
+                "qmd://notes/20260217221315-dette-er-en-notat/chunk99.md",
+                &map,
+            ),
+            Some("id1".into()),
+        );
+    }
+
+    #[test]
+    fn resolve_qmd_uri_with_leading_slashes() {
+        let map = make_path_map(&[("hello.md", "id1")]);
+        assert_eq!(resolve_path_to_id("qmd:///notes/hello.md", &map), Some("id1".into()));
+    }
+
+    #[test]
+    fn resolve_filename_with_normalization() {
+        // build_maps stores both original and normalized filenames.
+        let map = make_path_map(&[
+            ("my_cool_note.md", "id1"),
+            ("my-cool-note.md", "id1"), // normalized by build_maps
+        ]);
+        assert_eq!(resolve_path_to_id("qmd://notes/my-cool-note.md", &map), Some("id1".into()));
+    }
+
+    #[test]
+    fn resolve_unknown_returns_none() {
+        let map = make_path_map(&[("existing.md", "id1")]);
+        assert_eq!(resolve_path_to_id("qmd://notes/nonexistent.md", &map), None);
+    }
 }

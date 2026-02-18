@@ -38,6 +38,7 @@ pub struct NoteIndex {
 #[derive(Debug, Deserialize)]
 struct Frontmatter {
     id: Option<String>,
+    title: Option<String>,
     created: Option<String>,
     modified: Option<String>,
     tags: Option<Vec<String>>,
@@ -130,6 +131,7 @@ fn build_frontmatter(
     modified: &str,
     tags: &[String],
     starred: bool,
+    title: Option<&str>,
     extra: Option<&Mapping>,
 ) -> String {
     let mut map = Mapping::new();
@@ -137,6 +139,12 @@ fn build_frontmatter(
         Value::String("id".into()),
         Value::String(id.into()),
     );
+    if let Some(t) = title {
+        map.insert(
+            Value::String("title".into()),
+            Value::String(t.into()),
+        );
+    }
     map.insert(
         Value::String("created".into()),
         Value::String(created.into()),
@@ -155,7 +163,7 @@ fn build_frontmatter(
 
     // Merge extra fields (skip known keys)
     if let Some(extra) = extra {
-        const KNOWN: &[&str] = &["id", "created", "modified", "tags", "starred"];
+        const KNOWN: &[&str] = &["id", "created", "modified", "tags", "starred", "title"];
         for (key, value) in extra {
             if let Value::String(k) = key {
                 if !KNOWN.contains(&k.as_str()) {
@@ -172,11 +180,13 @@ fn build_frontmatter(
 }
 
 /// Save a note. If id is Some, update existing; otherwise create new.
+/// When `title` is None, auto-extract from content.
 pub fn save_note(
     notes_dir: &str,
     id: Option<String>,
     content: &str,
     tags: &[String],
+    title: Option<String>,
     index: &mut NoteIndex,
 ) -> io::Result<NoteMetadata> {
     let now: DateTime<Local> = Local::now();
@@ -186,7 +196,7 @@ pub fn save_note(
     let file_path: PathBuf;
     let extra: Option<Mapping>;
 
-    let title = extract_title(content);
+    let title = title.unwrap_or_else(|| extract_title(content));
 
     if let Some(existing_id) = id {
         // Update existing note
@@ -225,7 +235,7 @@ pub fn save_note(
     }
 
     let modified = now.to_rfc3339();
-    let frontmatter = build_frontmatter(&note_id, &created, &modified, tags, starred, extra.as_ref());
+    let frontmatter = build_frontmatter(&note_id, &created, &modified, tags, starred, Some(&title), extra.as_ref());
     let full_content = format!("{}{}", frontmatter, content);
 
     fs::write(&file_path, &full_content)?;
@@ -274,7 +284,7 @@ pub fn toggle_star(
     let (raw_yaml, body) = parse_raw_yaml(&raw);
 
     let frontmatter = build_frontmatter(
-        &meta.id, &meta.created, &meta.modified, &meta.tags, new_starred, raw_yaml.as_ref(),
+        &meta.id, &meta.created, &meta.modified, &meta.tags, new_starred, Some(&meta.title), raw_yaml.as_ref(),
     );
     let full_content = format!("{}{}", frontmatter, body);
     fs::write(&file_path, &full_content)?;
@@ -288,6 +298,48 @@ pub fn toggle_star(
     save_index(notes_dir, index)?;
 
     Ok(updated)
+}
+
+/// Set auto-generated tags on a note that currently has no tags.
+/// When `force` is true, overwrite existing tags (used by regenerate).
+/// Returns Some(updated metadata) if tags were applied, None if skipped.
+pub fn set_auto_tags(
+    notes_dir: &str,
+    id: &str,
+    tags: &[String],
+    index: &mut NoteIndex,
+    force: bool,
+) -> io::Result<Option<NoteMetadata>> {
+    let meta = match index.notes.get(id) {
+        Some(m) => m.clone(),
+        None => return Ok(None),
+    };
+
+    // Only apply if the note currently has no tags (unless forced)
+    if tags.is_empty() || (!force && !meta.tags.is_empty()) {
+        return Ok(None);
+    }
+
+    // Read the file and update frontmatter with new tags
+    let file_path = Path::new(notes_dir).join(&meta.path);
+    let raw = fs::read_to_string(&file_path)?;
+    let (raw_yaml, body) = parse_raw_yaml(&raw);
+
+    let frontmatter = build_frontmatter(
+        &meta.id, &meta.created, &meta.modified, tags, meta.starred, Some(&meta.title), raw_yaml.as_ref(),
+    );
+    let full_content = format!("{}{}", frontmatter, body);
+    fs::write(&file_path, &full_content)?;
+
+    let updated = NoteMetadata {
+        tags: tags.to_vec(),
+        ..meta
+    };
+
+    index.notes.insert(id.to_string(), updated.clone());
+    save_index(notes_dir, index)?;
+
+    Ok(Some(updated))
 }
 
 /// Delete a note by ID
@@ -527,7 +579,7 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
                 let (fm, body) = parse_frontmatter(&content);
                 if let Some(fm) = fm {
                     if let Some(id) = fm.id {
-                        let title = extract_title(&body);
+                        let title = fm.title.unwrap_or_else(|| extract_title(&body));
                         let filename = entry
                             .file_name()
                             .unwrap_or_default()
@@ -744,7 +796,7 @@ pub fn import_markdown_file(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let frontmatter = build_frontmatter(&note_id, &created, &modified, &tags, starred, Some(&extra));
+    let frontmatter = build_frontmatter(&note_id, &created, &modified, &tags, starred, Some(&title), Some(&extra));
     let full_content = format!("{}{}", frontmatter, body);
 
     let timestamp = now.format("%Y%m%d%H%M%S").to_string();
@@ -812,7 +864,7 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        let meta = save_note(&dir, None, "# Test Note\n\nHello world", &["test".to_string()], &mut index).unwrap();
+        let meta = save_note(&dir, None, "# Test Note\n\nHello world", &["test".to_string()], None, &mut index).unwrap();
         assert_eq!(meta.title, "Test Note");
         assert!(!meta.id.is_empty());
 
@@ -829,9 +881,9 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# First", &[], &mut index).unwrap();
-        save_note(&dir, None, "# Second", &[], &mut index).unwrap();
-        save_note(&dir, None, "# Third", &[], &mut index).unwrap();
+        save_note(&dir, None, "# First", &[], None, &mut index).unwrap();
+        save_note(&dir, None, "# Second", &[], None, &mut index).unwrap();
+        save_note(&dir, None, "# Third", &[], None, &mut index).unwrap();
 
         let recent = list_recent_notes(&index, 2, "created");
         assert_eq!(recent.len(), 2);
@@ -844,7 +896,7 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# Indexed Note", &["tag1".to_string()], &mut index).unwrap();
+        save_note(&dir, None, "# Indexed Note", &["tag1".to_string()], None, &mut index).unwrap();
 
         // Rebuild from scratch
         let rebuilt = rebuild_index(&dir).unwrap();
@@ -860,8 +912,8 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# A", &["alpha".to_string(), "beta".to_string()], &mut index).unwrap();
-        save_note(&dir, None, "# B", &["beta".to_string(), "gamma".to_string()], &mut index).unwrap();
+        save_note(&dir, None, "# A", &["alpha".to_string(), "beta".to_string()], None, &mut index).unwrap();
+        save_note(&dir, None, "# B", &["beta".to_string(), "gamma".to_string()], None, &mut index).unwrap();
 
         let tags = get_all_tags(&index);
         assert_eq!(tags, vec!["alpha", "beta", "gamma"]);
@@ -874,8 +926,8 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# Apple pie recipe\n\nDelicious apple pie", &[], &mut index).unwrap();
-        save_note(&dir, None, "# Banana bread\n\nYummy banana bread", &[], &mut index).unwrap();
+        save_note(&dir, None, "# Apple pie recipe\n\nDelicious apple pie", &[], None, &mut index).unwrap();
+        save_note(&dir, None, "# Banana bread\n\nYummy banana bread", &[], None, &mut index).unwrap();
 
         let results = search_notes(&dir, "apple", &index).unwrap();
         assert_eq!(results.len(), 1);
@@ -923,9 +975,9 @@ mod tests {
         let dir = setup_test_dir();
         let mut index = NoteIndex::default();
 
-        save_note(&dir, None, "# Meeting Notes\n\nSome content", &[], &mut index).unwrap();
-        save_note(&dir, None, "# Quick Start Guide\n\nAnother doc", &[], &mut index).unwrap();
-        save_note(&dir, None, "# Random Thoughts\n\nUnrelated", &[], &mut index).unwrap();
+        save_note(&dir, None, "# Meeting Notes\n\nSome content", &[], None, &mut index).unwrap();
+        save_note(&dir, None, "# Quick Start Guide\n\nAnother doc", &[], None, &mut index).unwrap();
+        save_note(&dir, None, "# Random Thoughts\n\nUnrelated", &[], None, &mut index).unwrap();
 
         // "mtg" fuzzy matches "Meeting" (m-t from Mee_t_ing, g from Meetin_g_... wait, no g in Meeting)
         // Actually: "mtg" → M(eeting) → no t or g... Let me think.
@@ -946,7 +998,7 @@ mod tests {
         let mut index = NoteIndex::default();
 
         // Title AND content both match "apple"
-        save_note(&dir, None, "# Apple pie recipe\n\nDelicious apple pie", &[], &mut index).unwrap();
+        save_note(&dir, None, "# Apple pie recipe\n\nDelicious apple pie", &[], None, &mut index).unwrap();
 
         let results = search_notes(&dir, "apple", &index).unwrap();
         // Should appear only once despite matching both fuzzy title and content

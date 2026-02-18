@@ -72,17 +72,27 @@ fn save_note(
     id: Option<String>,
     content: String,
     tags: Vec<String>,
+    title: Option<String>,
 ) -> Result<NoteMetadata, String> {
     let is_new = id.is_none();
+    // Get old tags before saving to detect changes.
+    let old_tags = id.as_ref().and_then(|existing_id| {
+        state.index.lock().ok()
+            .and_then(|idx| idx.notes.get(existing_id).map(|m| m.tags.clone()))
+    });
     let meta = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         let mut index = state.index.lock().map_err(|e| e.to_string())?;
-        notes::save_note(&dir, id, &content, &tags, &mut index).map_err(|e| e.to_string())?
+        notes::save_note(&dir, id, &content, &tags, title, &mut index).map_err(|e| e.to_string())?
     };
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.notify_change(&meta.path, &meta.title, is_new);
-    if let Ok(qmd) = state.qmd.lock() {
-        qmd.notify_change(&meta.id, &meta.title);
+    // Only notify QMD when tags changed or it's a new note (needs auto-tagging).
+    let tags_changed = is_new || old_tags.as_ref() != Some(&tags);
+    if tags_changed {
+        if let Ok(qmd) = state.qmd.lock() {
+            qmd.notify_change(&meta.id, &meta.title);
+        }
     }
     Ok(meta)
 }
@@ -213,6 +223,7 @@ pub fn run() {
             git_sync::set_git_remote,
             git_sync::dismiss_git_setup,
             qmd::get_related_notes,
+            qmd::regenerate_tags,
             qmd::check_tools,
         ])
         .build(tauri::generate_context!())

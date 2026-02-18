@@ -1,4 +1,9 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
+
+export interface TagInputHandle {
+  /** Commit any in-progress text as a tag. Returns the new tag, or null. */
+  flush: () => string | null;
+}
 
 interface TagInputProps {
   tags: string[];
@@ -6,7 +11,7 @@ interface TagInputProps {
   onChange: (tags: string[]) => void;
 }
 
-export function TagInput({ tags, allTags, onChange }: TagInputProps) {
+export const TagInput = forwardRef<TagInputHandle, TagInputProps>(function TagInput({ tags, allTags, onChange }, ref) {
   const [input, setInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -33,6 +38,19 @@ export function TagInput({ tags, allTags, onChange }: TagInputProps) {
     setShowSuggestions(false);
     setActiveIndex(0);
   };
+
+  // Returns the pending tag text (if any) so the caller can include it
+  // before saving — React state updates from addTag are async.
+  useImperativeHandle(ref, () => ({
+    flush: (): string | null => {
+      const trimmed = input.trim().toLowerCase();
+      if (trimmed && !tags.includes(trimmed)) {
+        addTag(input);
+        return trimmed;
+      }
+      return null;
+    },
+  }));
 
   const removeTag = (tag: string) => {
     onChange(tags.filter((t) => t !== tag));
@@ -104,4 +122,4 @@ export function TagInput({ tags, allTags, onChange }: TagInputProps) {
       </div>
     </div>
   );
-}
+});

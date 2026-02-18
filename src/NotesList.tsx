@@ -4,6 +4,7 @@ import type { NoteMetadata, SortBy } from "./api";
 interface NotesListProps {
   notes: NoteMetadata[];
   label: string;
+  loading?: boolean;
   onOpenNote: (id: string, metaKey: boolean) => void;
   highlightIndex?: number;
   sortBy: SortBy;
@@ -27,21 +28,21 @@ function relativeTime(dateStr: string): string {
   return date.toLocaleDateString();
 }
 
-export function NotesList({ notes, label, onOpenNote, highlightIndex = -1, sortBy, onSortChange }: NotesListProps) {
+export function NotesList({ notes, label, loading, onOpenNote, highlightIndex = -1, sortBy, onSortChange }: NotesListProps) {
   const highlightRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     highlightRef.current?.scrollIntoView({ block: "nearest" });
   }, [highlightIndex]);
 
-  if (notes.length === 0) return null;
+  if (notes.length === 0 && !loading) return null;
 
   const isRecent = label === "Recent";
 
   return (
     <div className="notes-list">
       <div className="notes-list-header">
-        <span>{label}</span>
+        <span>{label}{loading && <span className="related-loading"> ...</span>}</span>
         {isRecent && (
           <button
             className="sort-toggle"

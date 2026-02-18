@@ -362,12 +362,12 @@ export default function App() {
       if (e.key === "Escape") {
         const editorFocused = !!document.activeElement?.closest(".cm-editor");
         if (vimEnabled && editorFocused) {
-          return; // Let Vim handle Escape; Tab out of editor first to discard
+          return; // Let Vim handle Escape
         }
         e.preventDefault();
-        if (activePanel.isUserModified()) {
-          // Discard edits but keep panel open
-          activePanel.discardEdits();
+        if (activePanel.isUserModified() && editorFocused) {
+          // Save and close (same as Cmd+Enter)
+          activePanel.save();
         } else {
           activePanel.clear();
           // If not leftmost and now empty, close it
