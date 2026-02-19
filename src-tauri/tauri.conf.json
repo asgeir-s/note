@@ -10,6 +10,10 @@
     "beforeBuildCommand": "npm run build"
   },
   "bundle": {
+    "resources": [
+      "../scripts/setup-macos.sh",
+      "../scripts/setup-ubuntu.sh"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

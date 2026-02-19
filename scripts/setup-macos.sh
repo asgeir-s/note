@@ -11,7 +11,15 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Installing optional tools..."
+BREW_PREFIX="$(brew --prefix)"
+NODE_BIN="${BREW_PREFIX}/bin/node"
+NPM_BIN="${BREW_PREFIX}/bin/npm"
+QMD_BIN="${BREW_PREFIX}/bin/qmd"
+
+echo "Installing runtime tools..."
+
+# Runtime consistency for installed app tooling
+brew install node
 
 # Meeting recording: audio processing + transcription
 brew install ffmpeg whisper-cpp
@@ -22,6 +30,10 @@ if ! command -v ollama >/dev/null 2>&1; then
 else
   echo "ollama already installed."
 fi
+
+# Related notes search (must be installed with the same npm runtime).
+"${NPM_BIN}" install -g @tobilu/qmd
+"${QMD_BIN}" collection list >/dev/null
 
 # Download a whisper model if none exists
 MODEL_DIR="$HOME/.local/share/whisper-cpp/models"
@@ -35,9 +47,11 @@ else
 fi
 
 echo ""
-echo "Done. Optional tools installed:"
+echo "Done. Runtime tools installed:"
+[ -x "$NODE_BIN" ] && echo "  node: $("$NODE_BIN" --version)"
 command -v ffmpeg >/dev/null 2>&1 && echo "  ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
 command -v whisper-cli >/dev/null 2>&1 && echo "  whisper-cli: found"
+[ -x "$QMD_BIN" ] && echo "  qmd: $("$QMD_BIN" --version 2>&1)"
 command -v ollama >/dev/null 2>&1 && echo "  ollama: $(ollama --version 2>&1)"
 echo ""
 echo "To start ollama: ollama serve"

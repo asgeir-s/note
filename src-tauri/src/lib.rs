@@ -8,6 +8,7 @@ use notes::{NoteIndex, NoteMetadata};
 use qmd::QmdHandle;
 use recording::RecordingHandle;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, RunEvent, State};
 
@@ -44,6 +45,155 @@ pub struct AppState {
     pub qmd: Mutex<QmdHandle>,
     pub recording: Mutex<RecordingHandle>,
     pub model_settings: Mutex<ModelSettings>,
+}
+
+fn shell_escape_single_quoted(input: &str) -> String {
+    input.replace('\'', "'\"'\"'")
+}
+
+fn resolve_setup_script(app_handle: &tauri::AppHandle, file_name: &str) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    // Dev mode (repo checkout)
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("scripts")
+            .join(file_name),
+    );
+    // Packaged app resources (path layout can vary)
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidates.push(resource_dir.join("scripts").join(file_name));
+        candidates.push(resource_dir.join(file_name));
+    }
+    candidates.into_iter().find(|p| p.exists())
+}
+
+#[cfg(target_os = "macos")]
+fn open_terminal(command: &str) -> Result<(), String> {
+    let escaped = command
+        .replace('\\', "\\\\")
+        .replace('\"', "\\\"");
+    let script = format!("tell application \"Terminal\" to do script \"{escaped}\"");
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"Terminal\" to activate")
+        .arg("-e")
+        .arg(script)
+        .status()
+        .map_err(|e| format!("Failed to open Terminal: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Failed to launch Terminal command".into())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_terminal(command: &str) -> Result<(), String> {
+    let wrapped = format!(
+        "{command}; EXIT_CODE=$?; echo; if [ $EXIT_CODE -eq 0 ]; then echo \"Setup complete.\"; else echo \"Setup failed (exit $EXIT_CODE).\"; fi; echo \"Press Enter to close...\"; read -r _"
+    );
+    let mut attempts: Vec<(&str, Vec<String>)> = vec![
+        (
+            "x-terminal-emulator",
+            vec![
+                "-e".into(),
+                "bash".into(),
+                "-lc".into(),
+                wrapped.clone(),
+            ],
+        ),
+        (
+            "gnome-terminal",
+            vec![
+                "--".into(),
+                "bash".into(),
+                "-lc".into(),
+                wrapped.clone(),
+            ],
+        ),
+        (
+            "konsole",
+            vec![
+                "-e".into(),
+                "bash".into(),
+                "-lc".into(),
+                wrapped.clone(),
+            ],
+        ),
+        (
+            "alacritty",
+            vec![
+                "-e".into(),
+                "bash".into(),
+                "-lc".into(),
+                wrapped.clone(),
+            ],
+        ),
+        (
+            "xterm",
+            vec![
+                "-e".into(),
+                "bash".into(),
+                "-lc".into(),
+                wrapped,
+            ],
+        ),
+    ];
+    let mut last_err: Option<String> = None;
+    for (terminal, args) in attempts.drain(..) {
+        match std::process::Command::new(terminal).args(&args).spawn() {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last_err = Some(format!("{terminal}: {e}"));
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "No supported terminal emulator found".into()))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn open_terminal(_command: &str) -> Result<(), String> {
+    Err("Tool installer is not supported on this platform".into())
+}
+
+#[tauri::command]
+fn open_tool_installer(app_handle: tauri::AppHandle, tool: String) -> Result<(), String> {
+    let tool = tool.trim().to_lowercase();
+    let command = match tool.as_str() {
+        "git" => {
+            #[cfg(target_os = "macos")]
+            {
+                "xcode-select --install".to_string()
+            }
+            #[cfg(target_os = "linux")]
+            {
+                "sudo apt-get update && sudo apt-get install -y git".to_string()
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            {
+                return Err("Git installer is not supported on this platform".into());
+            }
+        }
+        "ffmpeg" | "whisper" | "ollama" | "qmd" => {
+            #[cfg(target_os = "macos")]
+            let script_name = "setup-macos.sh";
+            #[cfg(target_os = "linux")]
+            let script_name = "setup-ubuntu.sh";
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            {
+                return Err("Installer is not supported on this platform".into());
+            }
+
+            let script = resolve_setup_script(&app_handle, script_name)
+                .ok_or_else(|| format!("Setup script '{script_name}' not found"))?;
+            let script_path = script.to_string_lossy().to_string();
+            format!("bash '{}'", shell_escape_single_quoted(&script_path))
+        }
+        _ => return Err(format!("Unknown tool: {tool}")),
+    };
+
+    open_terminal(&command)
 }
 
 #[tauri::command]
@@ -563,6 +713,7 @@ pub fn run() {
             list_ollama_models,
             list_whisper_models,
             pull_ollama_model,
+            open_tool_installer,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -124,6 +124,71 @@ fn slugify(title: &str) -> String {
     }
 }
 
+fn format_meeting_title_from_tags(tags: &[String]) -> Option<String> {
+    let topic_tags: Vec<&String> = tags
+        .iter()
+        .filter(|t| t.as_str() != "meeting")
+        .take(2)
+        .collect();
+    if topic_tags.is_empty() {
+        return None;
+    }
+    let tag_part = topic_tags
+        .iter()
+        .map(|t| {
+            let mut chars = t.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(format!("Meeting about {tag_part}"))
+}
+
+fn is_auto_meeting_title(title: &str) -> bool {
+    if title == "Untitled"
+        || title == "Meeting about"
+        || title.starts_with("Meeting about ")
+    {
+        return true;
+    }
+    let Some(rest) = title.strip_prefix("Meeting ") else {
+        return false;
+    };
+
+    // Matches "Meeting Feb 19"
+    let mut parts = rest.split_whitespace();
+    if let (Some(month), Some(day), None) = (parts.next(), parts.next(), parts.next()) {
+        const MONTHS: &[&str] = &[
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        if MONTHS.contains(&month) && day.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+
+    // Matches "Meeting 2026-02-19 14:32"
+    if rest.len() == 16 {
+        let bytes = rest.as_bytes();
+        if bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes[10] == b' '
+            && bytes[13] == b':'
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(i, b)| matches!(i, 4 | 7 | 10 | 13) || b.is_ascii_digit())
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Build frontmatter string, merging any extra fields from a raw YAML mapping
 fn build_frontmatter(
     id: &str,
@@ -287,8 +352,8 @@ pub fn append_meeting_data(
         tags.push("meeting".to_string());
     }
 
-    let has_summary = body.contains("\n## Summary");
-    let has_transcript = body.contains("\n## Transcript");
+    let has_summary = body.lines().any(|line| line.trim() == "## Summary");
+    let has_transcript = body.lines().any(|line| line.trim() == "## Transcript");
     let content = if has_summary && has_transcript {
         body
     } else {
@@ -299,6 +364,13 @@ pub fn append_meeting_data(
         )
     };
 
+    // Keep user-defined titles. Replace only known auto-generated placeholders.
+    let title = if is_auto_meeting_title(&meta.title) {
+        format_meeting_title_from_tags(&tags).unwrap_or_else(|| "Meeting about".to_string())
+    } else {
+        meta.title.clone()
+    };
+
     let modified = Local::now().to_rfc3339();
     let frontmatter = build_frontmatter(
         &meta.id,
@@ -306,13 +378,14 @@ pub fn append_meeting_data(
         &modified,
         &tags,
         meta.starred,
-        Some(&meta.title),
+        Some(&title),
         raw_yaml.as_ref(),
     );
     let full_content = format!("{frontmatter}{content}");
     fs::write(&file_path, full_content)?;
 
     let updated = NoteMetadata {
+        title,
         modified,
         tags,
         ..meta
@@ -374,9 +447,43 @@ pub fn set_auto_tags(
         None => return Ok(None),
     };
 
-    // Only apply if the note currently has no tags (unless forced)
-    if tags.is_empty() || (!force && !meta.tags.is_empty()) {
+    if tags.is_empty() {
         return Ok(None);
+    }
+
+    // Normal flow:
+    // - For regular notes, only auto-tag when empty.
+    // - For meeting notes, merge generated tags into existing tags.
+    // - For forced regenerate, replace tags.
+    let next_tags = if force {
+        tags.to_vec()
+    } else if meta.tags.is_empty() {
+        tags.to_vec()
+    } else if meta.tags.iter().any(|t| t == "meeting") {
+        let mut merged = meta.tags.clone();
+        for tag in tags {
+            if !merged.iter().any(|t| t == tag) {
+                merged.push(tag.clone());
+            }
+        }
+        if merged == meta.tags {
+            return Ok(None);
+        }
+        merged
+    } else {
+        return Ok(None);
+    };
+
+    let mut next_title = meta.title.clone();
+    if !force
+        && meta.tags.iter().any(|t| t == "meeting")
+        && is_auto_meeting_title(&meta.title)
+    {
+        // For auto meeting titles, prefer the freshly generated backend tags
+        // so "Meeting about ..." reflects new inferred topics.
+        next_title = format_meeting_title_from_tags(tags)
+            .or_else(|| format_meeting_title_from_tags(&next_tags))
+            .unwrap_or_else(|| "Meeting about".to_string());
     }
 
     // Read the file and update frontmatter with new tags
@@ -385,13 +492,20 @@ pub fn set_auto_tags(
     let (raw_yaml, body) = parse_raw_yaml(&raw);
 
     let frontmatter = build_frontmatter(
-        &meta.id, &meta.created, &meta.modified, tags, meta.starred, Some(&meta.title), raw_yaml.as_ref(),
+        &meta.id,
+        &meta.created,
+        &meta.modified,
+        &next_tags,
+        meta.starred,
+        Some(&next_title),
+        raw_yaml.as_ref(),
     );
     let full_content = format!("{}{}", frontmatter, body);
     fs::write(&file_path, &full_content)?;
 
     let updated = NoteMetadata {
-        tags: tags.to_vec(),
+        tags: next_tags,
+        title: next_title,
         ..meta
     };
 

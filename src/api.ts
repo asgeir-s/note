@@ -260,11 +260,20 @@ export interface ToolStatus {
   whisper: boolean;
 }
 
+export type InstallToolKey = "git" | "qmd" | "ollama" | "ffmpeg" | "whisper";
+
 export async function checkTools(): Promise<ToolStatus> {
   if (isTauri()) {
     return invoke<ToolStatus>("check_tools");
   }
   return { git: false, qmd: false, ollama: false, ffmpeg: false, whisper: false };
+}
+
+export async function openToolInstaller(tool: InstallToolKey): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("open_tool_installer", { tool });
+  }
+  throw new Error("Tool installer is only available in the desktop app");
 }
 
 // ── Recording API ──────────────────────────────────────────────────

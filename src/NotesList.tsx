@@ -28,7 +28,15 @@ function relativeTime(dateStr: string): string {
   return date.toLocaleDateString();
 }
 
-export function NotesList({ notes, label, loading, onOpenNote, highlightIndex = -1, sortBy, onSortChange }: NotesListProps) {
+export function NotesList({
+  notes,
+  label,
+  loading,
+  onOpenNote,
+  highlightIndex = -1,
+  sortBy,
+  onSortChange,
+}: NotesListProps) {
   const highlightRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -42,11 +50,16 @@ export function NotesList({ notes, label, loading, onOpenNote, highlightIndex = 
   return (
     <div className="notes-list">
       <div className="notes-list-header">
-        <span>{label}{loading && <span className="related-loading"> ...</span>}</span>
+        <span>
+          {label}
+          {loading && <span className="related-loading"> ...</span>}
+        </span>
         {isRecent && (
           <button
             className="sort-toggle"
-            onClick={() => onSortChange(sortBy === "created" ? "modified" : "created")}
+            onClick={() =>
+              onSortChange(sortBy === "created" ? "modified" : "created")
+            }
           >
             {sortBy === "created" ? "Created" : "Updated"}
           </button>
@@ -62,8 +75,20 @@ export function NotesList({ notes, label, loading, onOpenNote, highlightIndex = 
               className={`note-item ${i === highlightIndex ? "highlighted" : ""}`}
               onClick={(e) => onOpenNote(note.id, e.metaKey || e.ctrlKey)}
             >
-              <span className="note-item-title">{note.starred && <span className="note-item-star">{"\u2605"}</span>}{note.title}</span>
-              <span className="note-item-time">{relativeTime(sortBy === "modified" ? note.modified : note.created)}</span>
+              <span className="note-item-title">
+                {note.starred && (
+                  <span className="note-item-star">{"\u2605"}</span>
+                )}
+                {note.tags.includes("meeting") && (
+                  <span className="note-item-meeting">⏺</span>
+                )}
+                {note.title}
+              </span>
+              <span className="note-item-time">
+                {relativeTime(
+                  sortBy === "modified" ? note.modified : note.created,
+                )}
+              </span>
             </button>
           </div>
         );

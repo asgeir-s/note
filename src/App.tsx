@@ -3,15 +3,43 @@ import { createPortal } from "react-dom";
 import { NotePanel } from "./NotePanel";
 import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
-import { listRecentNotes, getAllTags, rebuildIndex, importMarkdownFile, getGitRemote, setGitRemote, dismissGitSetup, getNotesDir, setNotesDir, checkTools, startRecording, stopRecording, checkPendingJobs, appendMeetingData as appendMeetingDataToNote, getModelSettings, setModelSettings as setModelSettingsApi, listOllamaModels, listWhisperModels, pullOllamaModel } from "./api";
+import {
+  listRecentNotes,
+  getAllTags,
+  rebuildIndex,
+  importMarkdownFile,
+  getGitRemote,
+  setGitRemote,
+  dismissGitSetup,
+  getNotesDir,
+  setNotesDir,
+  checkTools,
+  openToolInstaller,
+  startRecording,
+  stopRecording,
+  checkPendingJobs,
+  appendMeetingData as appendMeetingDataToNote,
+  getModelSettings,
+  setModelSettings as setModelSettingsApi,
+  listOllamaModels,
+  listWhisperModels,
+  pullOllamaModel,
+} from "./api";
 import type { RecordingState } from "./api";
-import type { ToolStatus, ModelSettings, OllamaModelInfo, WhisperModelInfo } from "./api";
+import type {
+  ToolStatus,
+  ModelSettings,
+  OllamaModelInfo,
+  WhisperModelInfo,
+} from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 import { loadSavedTheme, saveTheme, applyThemeVars } from "./themes";
 import { ThemePicker } from "./ThemePicker";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsPanel } from "./SettingsPanel";
 import type { PullProgress } from "./SettingsPanel";
+import { BackgroundJobsIndicator } from "./BackgroundJobs";
+import type { BgJob } from "./BackgroundJobs";
 
 interface PanelState {
   id: string;
@@ -29,7 +57,9 @@ const NOTES_DIR_PROMPT_KEY = "notes-dir-prompted-v1";
 
 function isMacOS(): boolean {
   if (typeof navigator === "undefined") return false;
-  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+  return /Mac|iPhone|iPad|iPod/i.test(
+    navigator.platform || navigator.userAgent,
+  );
 }
 
 export default function App() {
@@ -43,7 +73,9 @@ export default function App() {
   const [showHotkeys, setShowHotkeys] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>("created");
   const [themeId, setThemeId] = useState(() => loadSavedTheme());
-  const [vimEnabled, setVimEnabled] = useState(() => localStorage.getItem("note-vim") === "1");
+  const [vimEnabled, setVimEnabled] = useState(
+    () => localStorage.getItem("note-vim") === "1",
+  );
   const [zoom, setZoom] = useState(() => {
     const saved = localStorage.getItem("note-zoom");
     return saved ? Number(saved) : 100;
@@ -55,32 +87,65 @@ export default function App() {
   const [gitBanner, setGitBanner] = useState(false);
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitError, setGitError] = useState<string | null>(null);
-  const [closeWarningIndex, setCloseWarningIndex] = useState<number | null>(null);
-  const closeWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [recordingCloseWarningIndex, setRecordingCloseWarningIndex] = useState<number | null>(null);
-  const recordingCloseWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [closeWarningIndex, setCloseWarningIndex] = useState<number | null>(
+    null,
+  );
+  const closeWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const [recordingCloseWarningIndex, setRecordingCloseWarningIndex] = useState<
+    number | null
+  >(null);
+  const recordingCloseWarningTimeout = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   const [deleteWarning, setDeleteWarning] = useState(false);
-  const deleteWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deleteWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const gPendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
-  const [recording, setRecording] = useState<RecordingState>({ active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
+  const [recording, setRecording] = useState<RecordingState>({
+    active: false,
+    note_id: null,
+    elapsed_seconds: 0,
+    mic_level: 0,
+    system_level: 0,
+  });
   const [recordingStartPending, setRecordingStartPending] = useState(false);
   const recordingStartPendingRef = useRef(false);
-  const [processingProgressByPanel, setProcessingProgressByPanel] = useState<Record<string, string>>({});
-  const [processingProgressByNote, setProcessingProgressByNote] = useState<Record<string, string>>({});
-  const [recordingDevice, setRecordingDevice] = useState<string | null>(() => localStorage.getItem("recording-device"));
-  const [modelSettings, setModelSettings] = useState<ModelSettings>({ keyword_model: null, summary_model: null, whisper_model: null });
+  const [processingProgressByPanel, setProcessingProgressByPanel] = useState<
+    Record<string, string>
+  >({});
+  const [processingProgressByNote, setProcessingProgressByNote] = useState<
+    Record<string, string>
+  >({});
+  const [recordingDevice, setRecordingDevice] = useState<string | null>(() =>
+    localStorage.getItem("recording-device"),
+  );
+  const [modelSettings, setModelSettings] = useState<ModelSettings>({
+    keyword_model: null,
+    summary_model: null,
+    whisper_model: null,
+  });
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
   const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
   const [recordingPanelId, setRecordingPanelId] = useState<string | null>(null);
   const pendingRecordingPanelRef = useRef<string | null>(null);
-  const pendingRecordingPanelsByNoteRef = useRef<Map<string, string>>(new Map());
+  const pendingRecordingPanelsByNoteRef = useRef<Map<string, string>>(
+    new Map(),
+  );
   const recordingNoteToPanelRef = useRef<Map<string, string>>(new Map());
-  const [meetingReadyToast, setMeetingReadyToast] = useState<string | null>(null);
-  const spacePendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [meetingReadyToast, setMeetingReadyToast] = useState<string | null>(
+    null,
+  );
+  const [bgJobs, setBgJobs] = useState<Map<string, BgJob>>(new Map());
+  const spacePendingTimeout = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const primaryModifier = isMacOS() ? "⌘" : "Ctrl";
 
   const panelRefs = useRef<Map<string, PanelHandle>>(new Map());
@@ -89,15 +154,18 @@ export default function App() {
   const prevActivePanelRef = useRef(0);
   const pendingFocusPanelId = useRef<string | null>(firstPanelId);
 
-  const setActivePanelIndex = useCallback((next: number | ((prev: number) => number)) => {
-    _setActivePanelIndex((current) => {
-      const nextVal = typeof next === "function" ? next(current) : next;
-      if (nextVal !== current) {
-        prevActivePanelRef.current = current;
-      }
-      return nextVal;
-    });
-  }, []);
+  const setActivePanelIndex = useCallback(
+    (next: number | ((prev: number) => number)) => {
+      _setActivePanelIndex((current) => {
+        const nextVal = typeof next === "function" ? next(current) : next;
+        if (nextVal !== current) {
+          prevActivePanelRef.current = current;
+        }
+        return nextVal;
+      });
+    },
+    [],
+  );
 
   const handleThemeChange = useCallback((id: string) => {
     setThemeId(id);
@@ -129,14 +197,17 @@ export default function App() {
     }
   }, []);
 
-  const handleModelSettingsChange = useCallback(async (settings: ModelSettings) => {
-    setModelSettings(settings);
-    try {
-      await setModelSettingsApi(settings);
-    } catch {
-      // ignore
-    }
-  }, []);
+  const handleModelSettingsChange = useCallback(
+    async (settings: ModelSettings) => {
+      setModelSettings(settings);
+      try {
+        await setModelSettingsApi(settings);
+      } catch {
+        // ignore
+      }
+    },
+    [],
+  );
 
   const handlePullModel = useCallback(async (name: string) => {
     try {
@@ -207,7 +278,8 @@ export default function App() {
       // First-run prompt for notes directory (before git setup).
       try {
         const currentNotesDir = await getNotesDir();
-        const promptedNotesDir = localStorage.getItem(NOTES_DIR_PROMPT_KEY) === "1";
+        const promptedNotesDir =
+          localStorage.getItem(NOTES_DIR_PROMPT_KEY) === "1";
         if (currentNotesDir && !promptedNotesDir) {
           setNotesDirPath(currentNotesDir);
           setNotesDirBanner(true);
@@ -226,7 +298,6 @@ export default function App() {
       } catch {
         // Not in Tauri
       }
-
     };
     void init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -234,6 +305,7 @@ export default function App() {
 
   // Listen for backend sync events
   useEffect(() => {
+    let cancelled = false;
     let unlistenGitError: (() => void) | undefined;
     let unlistenNotesChanged: (() => void) | undefined;
     let unlistenRecStarted: (() => void) | undefined;
@@ -243,196 +315,325 @@ export default function App() {
     let unlistenRecComplete: (() => void) | undefined;
     let unlistenRecError: (() => void) | undefined;
     let unlistenPullProgress: (() => void) | undefined;
+    let unlistenGitSync: (() => void) | undefined;
+    let unlistenQmdProcessing: (() => void) | undefined;
+    let unlistenRelatedChanged: (() => void) | undefined;
 
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        unlistenGitError = await listen<string>("git-sync-error", (event) => {
-          setGitError(event.payload);
-          setTimeout(() => setGitError(null), 5000);
-        });
-        unlistenNotesChanged = await listen("notes-changed", () => {
+        const register = async (
+          event: string,
+          handler: (event: { payload: any }) => void,
+        ): Promise<(() => void) | undefined> => {
+          const unlisten = await listen(event as never, handler as never);
+          if (cancelled) {
+            unlisten();
+            return undefined;
+          }
+          return unlisten;
+        };
+
+        unlistenGitError = await register(
+          "git-sync-error",
+          (event: { payload: string }) => {
+            setGitError(event.payload);
+            setTimeout(() => setGitError(null), 5000);
+          },
+        );
+        unlistenNotesChanged = await register("notes-changed", () => {
           void refreshSharedState();
           for (const panel of panelRefs.current.values()) {
             void panel.refreshLoadedNote();
           }
         });
-        unlistenRecStarted = await listen<string>("recording-started", (event) => {
-          const noteId = event.payload;
-          const panelId =
-            pendingRecordingPanelsByNoteRef.current.get(noteId)
-            ?? recordingNoteToPanelRef.current.get(noteId)
-            ?? pendingRecordingPanelRef.current;
-          pendingRecordingPanelsByNoteRef.current.delete(noteId);
-          pendingRecordingPanelRef.current = null;
-          if (panelId) {
-            recordingNoteToPanelRef.current.set(noteId, panelId);
-            setProcessingProgressByPanel((prev) => {
-              if (!prev[panelId]) return prev;
+        unlistenRecStarted = await register(
+          "recording-started",
+          (event: { payload: string }) => {
+            const noteId = event.payload;
+            const panelId =
+              pendingRecordingPanelsByNoteRef.current.get(noteId) ??
+              recordingNoteToPanelRef.current.get(noteId) ??
+              pendingRecordingPanelRef.current;
+            pendingRecordingPanelsByNoteRef.current.delete(noteId);
+            pendingRecordingPanelRef.current = null;
+            if (panelId) {
+              recordingNoteToPanelRef.current.set(noteId, panelId);
+              setProcessingProgressByPanel((prev) => {
+                if (!prev[panelId]) return prev;
+                const next = { ...prev };
+                delete next[panelId];
+                return next;
+              });
+            }
+            recordingStartPendingRef.current = false;
+            setRecordingStartPending(false);
+            setProcessingProgressByNote((prev) => {
+              if (!prev[noteId]) return prev;
               const next = { ...prev };
-              delete next[panelId];
+              delete next[noteId];
               return next;
             });
-          }
-          recordingStartPendingRef.current = false;
-          setRecordingStartPending(false);
-          setProcessingProgressByNote((prev) => {
-            if (!prev[noteId]) return prev;
-            const next = { ...prev };
-            delete next[noteId];
-            return next;
-          });
-          setRecording({ active: true, note_id: noteId, elapsed_seconds: 0, mic_level: 0, system_level: 0 });
-          setRecordingPanelId(panelId ?? null);
-        });
-        unlistenRecTick = await listen<{ elapsed_seconds: number; mic_level: number; system_level: number }>("recording-tick", (event) => {
-          setRecording((prev) => ({
-            ...prev,
-            elapsed_seconds: event.payload.elapsed_seconds,
-            mic_level: event.payload.mic_level,
-            system_level: event.payload.system_level,
-          }));
-        });
-        unlistenRecStopped = await listen<string>("recording-stopped", (event) => {
-          const noteId = event.payload;
-          const panelId = recordingNoteToPanelRef.current.get(noteId);
-          setRecording((prev) => ({ ...prev, active: false }));
-          setRecordingPanelId(null);
-          if (recordingCloseWarningTimeout.current) {
-            clearTimeout(recordingCloseWarningTimeout.current);
-          }
-          setRecordingCloseWarningIndex(null);
-          setProcessingProgressByNote((prev) => ({
-            ...prev,
-            [noteId]: "Processing...",
-          }));
-          if (panelId) {
+            setRecording({
+              active: true,
+              note_id: noteId,
+              elapsed_seconds: 0,
+              mic_level: 0,
+              system_level: 0,
+            });
+            setRecordingPanelId(panelId ?? null);
+          },
+        );
+        unlistenRecTick = await register(
+          "recording-tick",
+          (event: {
+            payload: {
+              elapsed_seconds: number;
+              mic_level: number;
+              system_level: number;
+            };
+          }) => {
+            setRecording((prev) => ({
+              ...prev,
+              elapsed_seconds: event.payload.elapsed_seconds,
+              mic_level: event.payload.mic_level,
+              system_level: event.payload.system_level,
+            }));
+          },
+        );
+        unlistenRecStopped = await register(
+          "recording-stopped",
+          (event: { payload: string }) => {
+            const noteId = event.payload;
+            const panelId = recordingNoteToPanelRef.current.get(noteId);
+            setRecording((prev) => ({ ...prev, active: false }));
+            setRecordingPanelId(null);
+            if (recordingCloseWarningTimeout.current) {
+              clearTimeout(recordingCloseWarningTimeout.current);
+            }
+            setRecordingCloseWarningIndex(null);
+            setProcessingProgressByNote((prev) => ({
+              ...prev,
+              [noteId]: "Processing...",
+            }));
+            if (panelId) {
+              setProcessingProgressByPanel((prev) => ({
+                ...prev,
+                [panelId]: "Processing...",
+              }));
+            }
+          },
+        );
+        unlistenRecProgress = await register(
+          "recording-progress",
+          (event: {
+            payload: { note_id: string; stage: string; detail: string };
+          }) => {
+            setProcessingProgressByNote((prev) => ({
+              ...prev,
+              [event.payload.note_id]: event.payload.detail,
+            }));
+            const panelId = recordingNoteToPanelRef.current.get(
+              event.payload.note_id,
+            );
+            if (!panelId) return;
             setProcessingProgressByPanel((prev) => ({
               ...prev,
-              [panelId]: "Processing...",
+              [panelId]: event.payload.detail,
             }));
-          }
-        });
-        unlistenRecProgress = await listen<{ note_id: string; stage: string; detail: string }>("recording-progress", (event) => {
-          setProcessingProgressByNote((prev) => ({
-            ...prev,
-            [event.payload.note_id]: event.payload.detail,
-          }));
-          const panelId = recordingNoteToPanelRef.current.get(event.payload.note_id);
-          if (!panelId) return;
-          setProcessingProgressByPanel((prev) => ({
-            ...prev,
-            [panelId]: event.payload.detail,
-          }));
-        });
-        unlistenRecComplete = await listen<{ note_id: string; summary: string | null; transcript: string | null }>("recording-complete", (event) => {
-          const { note_id, summary, transcript } = event.payload;
-          const sourcePanelId = recordingNoteToPanelRef.current.get(note_id);
-          if (sourcePanelId) {
-            setProcessingProgressByPanel((prev) => {
-              if (!prev[sourcePanelId]) return prev;
+          },
+        );
+        unlistenRecComplete = await register(
+          "recording-complete",
+          (event: {
+            payload: {
+              note_id: string;
+              summary: string | null;
+              transcript: string | null;
+            };
+          }) => {
+            const { note_id, summary, transcript } = event.payload;
+            const sourcePanelId = recordingNoteToPanelRef.current.get(note_id);
+            if (sourcePanelId) {
+              setProcessingProgressByPanel((prev) => {
+                if (!prev[sourcePanelId]) return prev;
+                const next = { ...prev };
+                delete next[sourcePanelId];
+                return next;
+              });
+            }
+            recordingNoteToPanelRef.current.delete(note_id);
+            pendingRecordingPanelsByNoteRef.current.delete(note_id);
+            setProcessingProgressByNote((prev) => {
+              if (!prev[note_id]) return prev;
               const next = { ...prev };
-              delete next[sourcePanelId];
+              delete next[note_id];
               return next;
             });
-          }
-          recordingNoteToPanelRef.current.delete(note_id);
-          pendingRecordingPanelsByNoteRef.current.delete(note_id);
-          setProcessingProgressByNote((prev) => {
-            if (!prev[note_id]) return prev;
-            const next = { ...prev };
-            delete next[note_id];
-            return next;
-          });
-          setRecording((prev) => {
-            if (prev.active || prev.note_id !== note_id) return prev;
-            return { active: false, note_id: null, elapsed_seconds: 0, mic_level: 0, system_level: 0 };
-          });
-          void refreshSharedState();
-          if (summary && transcript) {
-            // Existing note — first try the panel where recording started.
-            let found = false;
-            if (sourcePanelId) {
-              const sourcePanel = panelRefs.current.get(sourcePanelId);
-              if (sourcePanel && sourcePanel.getLoadedNoteId() === note_id) {
-                void sourcePanel.appendMeetingData(summary, transcript);
-                found = true;
-              }
-            }
-            if (!found) {
-              for (const panel of panelRefs.current.values()) {
-                if (panel.getLoadedNoteId() === note_id) {
-                  void panel.appendMeetingData(summary, transcript);
+            setRecording((prev) => {
+              if (prev.active || prev.note_id !== note_id) return prev;
+              return {
+                active: false,
+                note_id: null,
+                elapsed_seconds: 0,
+                mic_level: 0,
+                system_level: 0,
+              };
+            });
+            void refreshSharedState();
+            if (summary && transcript) {
+              // Existing note — first try the panel where recording started.
+              let found = false;
+              if (sourcePanelId) {
+                const sourcePanel = panelRefs.current.get(sourcePanelId);
+                if (sourcePanel && sourcePanel.getLoadedNoteId() === note_id) {
+                  void sourcePanel.appendMeetingData(summary, transcript);
                   found = true;
+                }
+              }
+              if (!found) {
+                for (const panel of panelRefs.current.values()) {
+                  if (panel.getLoadedNoteId() === note_id) {
+                    void panel.appendMeetingData(summary, transcript);
+                    found = true;
+                    break;
+                  }
+                }
+              }
+              if (!found) {
+                // Panel was closed or note unloaded — persist meeting data to the note
+                // so reopening it later still shows summary/transcript.
+                void appendMeetingDataToNote(note_id, summary, transcript)
+                  .then(() => {
+                    void refreshSharedState();
+                    setMeetingReadyToast(note_id);
+                    setTimeout(() => setMeetingReadyToast(null), 8000);
+                  })
+                  .catch(() => {
+                    setMeetingReadyToast(note_id);
+                    setTimeout(() => setMeetingReadyToast(null), 8000);
+                  });
+              }
+            } else {
+              // New note created by backend — never replace the source editing panel.
+              let loaded = false;
+              for (const [panelId, panel] of panelRefs.current.entries()) {
+                if (panelId === sourcePanelId) continue;
+                if (
+                  !panel.getLoadedNoteId() &&
+                  !panel.hasContent() &&
+                  !panel.isUserModified()
+                ) {
+                  panel.loadNote(note_id);
+                  loaded = true;
                   break;
                 }
               }
-            }
-            if (!found) {
-              // Panel was closed or note unloaded — persist meeting data to the note
-              // so reopening it later still shows summary/transcript.
-              void appendMeetingDataToNote(note_id, summary, transcript)
-                .then(() => {
-                  void refreshSharedState();
-                  setMeetingReadyToast(note_id);
-                  setTimeout(() => setMeetingReadyToast(null), 8000);
-                })
-                .catch(() => {
-                  setMeetingReadyToast(note_id);
-                  setTimeout(() => setMeetingReadyToast(null), 8000);
-                });
-            }
-          } else {
-            // New note created by backend — never replace the source editing panel.
-            let loaded = false;
-            for (const [panelId, panel] of panelRefs.current.entries()) {
-              if (panelId === sourcePanelId) continue;
-              if (!panel.getLoadedNoteId() && !panel.hasContent() && !panel.isUserModified()) {
-                panel.loadNote(note_id);
-                loaded = true;
-                break;
+              if (!loaded) {
+                // No truly empty panel available — open meeting output in a new side panel
+                // while keeping focus in the current editor.
+                setPanels((prev) => [
+                  ...prev,
+                  {
+                    id: genPanelId(),
+                    initialNoteId: note_id,
+                    independent: true,
+                  },
+                ]);
+                setPanelWidths((w) => [...w, 1]);
               }
             }
-            if (!loaded) {
-              // No truly empty panel available — open meeting output in a new side panel
-              // while keeping focus in the current editor.
-              setPanels((prev) => [
-                ...prev,
-                { id: genPanelId(), initialNoteId: note_id, independent: true },
-              ]);
-              setPanelWidths((w) => [...w, 1]);
+          },
+        );
+        unlistenRecError = await register(
+          "recording-error",
+          (event: { payload: string }) => {
+            setGitError(event.payload); // Reuse the error toast
+            setTimeout(() => setGitError(null), 5000);
+            recordingStartPendingRef.current = false;
+            setRecordingStartPending(false);
+            if (recordingCloseWarningTimeout.current) {
+              clearTimeout(recordingCloseWarningTimeout.current);
             }
-          }
-        });
-        unlistenRecError = await listen<string>("recording-error", (event) => {
-          setGitError(event.payload); // Reuse the error toast
-          setTimeout(() => setGitError(null), 5000);
-          recordingStartPendingRef.current = false;
-          setRecordingStartPending(false);
-          if (recordingCloseWarningTimeout.current) {
-            clearTimeout(recordingCloseWarningTimeout.current);
-          }
-          setRecordingCloseWarningIndex(null);
-          pendingRecordingPanelsByNoteRef.current.clear();
-          pendingRecordingPanelRef.current = null;
-        });
+            setRecordingCloseWarningIndex(null);
+            pendingRecordingPanelsByNoteRef.current.clear();
+            pendingRecordingPanelRef.current = null;
+          },
+        );
 
-        unlistenPullProgress = await listen<{ model: string; status: string; completed: number | null; total: number | null }>("ollama-pull-progress", (event) => {
-          const { model, status, completed, total } = event.payload;
-          const percent = completed != null && total != null && total > 0
-            ? Math.round((completed / total) * 100)
-            : null;
-          setPullProgress({ model, status, percent });
-        });
+        unlistenPullProgress = await register(
+          "ollama-pull-progress",
+          (event: {
+            payload: {
+              model: string;
+              status: string;
+              completed: number | null;
+              total: number | null;
+            };
+          }) => {
+            const { model, status, completed, total } = event.payload;
+            const percent =
+              completed != null && total != null && total > 0
+                ? Math.round((completed / total) * 100)
+                : null;
+            setPullProgress({ model, status, percent });
+          },
+        );
 
         // Resume any pending recording jobs from a previous session.
         void checkPendingJobs();
+
+        unlistenGitSync = await register(
+          "git-sync-status",
+          (event: { payload: boolean }) => {
+            setBgJobs((prev) => {
+              const next = new Map(prev);
+              if (event.payload) {
+                next.set("git-sync", { label: "Syncing with git" });
+              } else {
+                next.delete("git-sync");
+              }
+              return next;
+            });
+          },
+        );
+
+        unlistenQmdProcessing = await register(
+          "qmd-processing",
+          (event: { payload: string[] }) => {
+            const noteIds = event.payload;
+            setBgJobs((prev) => {
+              const next = new Map(prev);
+              for (const key of next.keys()) {
+                if (key.startsWith("qmd-")) next.delete(key);
+              }
+              for (const id of noteIds) {
+                next.set(`qmd-${id}`, {
+                  label: "Getting tags & related notes",
+                  noteId: id,
+                });
+              }
+              return next;
+            });
+          },
+        );
+
+        unlistenRelatedChanged = await register("related-notes-changed", () => {
+          setBgJobs((prev) => {
+            const next = new Map(prev);
+            for (const key of next.keys()) {
+              if (key.startsWith("qmd-")) next.delete(key);
+            }
+            return next;
+          });
+        });
       } catch {
         // Not in Tauri
       }
     })();
 
     return () => {
+      cancelled = true;
       unlistenGitError?.();
       unlistenNotesChanged?.();
       unlistenRecStarted?.();
@@ -442,6 +643,9 @@ export default function App() {
       unlistenRecComplete?.();
       unlistenRecError?.();
       unlistenPullProgress?.();
+      unlistenGitSync?.();
+      unlistenQmdProcessing?.();
+      unlistenRelatedChanged?.();
     };
   }, [refreshSharedState]);
 
@@ -479,7 +683,12 @@ export default function App() {
   );
 
   const openNoteToRight = useCallback(
-    (panelIndex: number, noteId: string, forceNew: boolean, keepFocus?: boolean) => {
+    (
+      panelIndex: number,
+      noteId: string,
+      forceNew: boolean,
+      keepFocus?: boolean,
+    ) => {
       setPanels((prev) => {
         if (forceNew) {
           // Cmd+click: always append to the far right as independent panel
@@ -572,84 +781,104 @@ export default function App() {
     [panels, findPanelWithNote, openNoteToRight],
   );
 
-  const closePanel = useCallback((index: number, focusIndex?: number) => {
-    setPanels((prev) => {
-      if (prev.length <= 1) return prev;
-      const next = prev.filter((_, i) => i !== index);
-      setPanelWidths((w) => w.filter((_, i) => i !== index));
-      if (focusIndex !== undefined) {
-        // Adjust the requested focus index for the removed panel
-        let adjusted = focusIndex;
-        if (focusIndex > index) adjusted--;
-        setActivePanelIndex(Math.min(adjusted, next.length - 1));
-      } else {
-        setActivePanelIndex((active) => {
-          if (active >= next.length) return next.length - 1;
-          if (active > index) return active - 1;
-          return active;
-        });
+  const closePanel = useCallback(
+    (index: number, focusIndex?: number) => {
+      setPanels((prev) => {
+        if (prev.length <= 1) return prev;
+        const next = prev.filter((_, i) => i !== index);
+        setPanelWidths((w) => w.filter((_, i) => i !== index));
+        if (focusIndex !== undefined) {
+          // Adjust the requested focus index for the removed panel
+          let adjusted = focusIndex;
+          if (focusIndex > index) adjusted--;
+          setActivePanelIndex(Math.min(adjusted, next.length - 1));
+        } else {
+          setActivePanelIndex((active) => {
+            if (active >= next.length) return next.length - 1;
+            if (active > index) return active - 1;
+            return active;
+          });
+        }
+        return next;
+      });
+    },
+    [setActivePanelIndex],
+  );
+
+  const handleRecordingPanelClose = useCallback(
+    (index: number): boolean => {
+      const panelId = panels[index]?.id;
+      const isRecordingPanel =
+        !!panelId && recording.active && panelId === recordingPanelId;
+      if (!isRecordingPanel) return false;
+
+      if (recordingCloseWarningIndex === index) {
+        if (recordingCloseWarningTimeout.current) {
+          clearTimeout(recordingCloseWarningTimeout.current);
+        }
+        setRecordingCloseWarningIndex(null);
+        void stopRecording();
+        closePanel(index);
+        return true;
       }
-      return next;
-    });
-  }, [setActivePanelIndex]);
 
-  const handleRecordingPanelClose = useCallback((index: number): boolean => {
-    const panelId = panels[index]?.id;
-    const isRecordingPanel = !!panelId && recording.active && panelId === recordingPanelId;
-    if (!isRecordingPanel) return false;
-
-    if (recordingCloseWarningIndex === index) {
+      if (closeWarningTimeout.current)
+        clearTimeout(closeWarningTimeout.current);
+      setCloseWarningIndex(null);
       if (recordingCloseWarningTimeout.current) {
         clearTimeout(recordingCloseWarningTimeout.current);
       }
-      setRecordingCloseWarningIndex(null);
-      void stopRecording();
-      closePanel(index);
+      setRecordingCloseWarningIndex(index);
+      recordingCloseWarningTimeout.current = setTimeout(
+        () => setRecordingCloseWarningIndex(null),
+        3000,
+      );
       return true;
-    }
+    },
+    [
+      panels,
+      recording.active,
+      recordingPanelId,
+      recordingCloseWarningIndex,
+      closePanel,
+    ],
+  );
 
-    if (closeWarningTimeout.current) clearTimeout(closeWarningTimeout.current);
-    setCloseWarningIndex(null);
-    if (recordingCloseWarningTimeout.current) {
-      clearTimeout(recordingCloseWarningTimeout.current);
-    }
-    setRecordingCloseWarningIndex(index);
-    recordingCloseWarningTimeout.current = setTimeout(
-      () => setRecordingCloseWarningIndex(null),
-      3000,
-    );
-    return true;
-  }, [panels, recording.active, recordingPanelId, recordingCloseWarningIndex, closePanel]);
-
-  const handleStartRecording = useCallback(async (panelIdArg?: string) => {
-    if (recording.active || recordingStartPendingRef.current) return;
-    const panelId = panelIdArg ?? panels[activePanelIndex]?.id;
-    if (!panelId) return;
-    const panel = panelRefs.current.get(panelId);
-    let noteId: string | undefined;
-    if (panel) {
-      noteId = panel.getLoadedNoteId() ?? undefined;
-      // Ensure recording is always tied to this panel's note, even if brand-new.
-      if (!noteId) {
-        noteId = await panel.ensureRecordingNote();
+  const handleStartRecording = useCallback(
+    async (panelIdArg?: string) => {
+      if (recording.active || recordingStartPendingRef.current) return;
+      const panelId = panelIdArg ?? panels[activePanelIndex]?.id;
+      if (!panelId) return;
+      const panel = panelRefs.current.get(panelId);
+      let noteId: string | undefined;
+      if (panel) {
+        noteId = panel.getLoadedNoteId() ?? undefined;
+        // Ensure recording is always tied to this panel's note, even if brand-new.
+        if (!noteId) {
+          noteId = await panel.ensureRecordingNote();
+        }
       }
-    }
-    pendingRecordingPanelRef.current = panelId;
-    recordingStartPendingRef.current = true;
-    setRecordingStartPending(true);
-    try {
-      const startedNoteId = await startRecording(recordingDevice ?? undefined, noteId);
-      pendingRecordingPanelsByNoteRef.current.set(startedNoteId, panelId);
-      recordingNoteToPanelRef.current.set(startedNoteId, panelId);
-    } catch (e) {
-      recordingStartPendingRef.current = false;
-      setRecordingStartPending(false);
-      pendingRecordingPanelRef.current = null;
-      const msg = e instanceof Error ? e.message : String(e);
-      setGitError(msg);
-      setTimeout(() => setGitError(null), 5000);
-    }
-  }, [panels, activePanelIndex, recordingDevice, recording.active]);
+      pendingRecordingPanelRef.current = panelId;
+      recordingStartPendingRef.current = true;
+      setRecordingStartPending(true);
+      try {
+        const startedNoteId = await startRecording(
+          recordingDevice ?? undefined,
+          noteId,
+        );
+        pendingRecordingPanelsByNoteRef.current.set(startedNoteId, panelId);
+        recordingNoteToPanelRef.current.set(startedNoteId, panelId);
+      } catch (e) {
+        recordingStartPendingRef.current = false;
+        setRecordingStartPending(false);
+        pendingRecordingPanelRef.current = null;
+        const msg = e instanceof Error ? e.message : String(e);
+        setGitError(msg);
+        setTimeout(() => setGitError(null), 5000);
+      }
+    },
+    [panels, activePanelIndex, recordingDevice, recording.active],
+  );
 
   // Keyboard shortcuts
   const handleKeyDown = useCallback(
@@ -679,9 +908,7 @@ export default function App() {
         return;
       }
 
-      const activePanel = panelRefs.current.get(
-        panels[activePanelIndex]?.id,
-      );
+      const activePanel = panelRefs.current.get(panels[activePanelIndex]?.id);
       if (!activePanel) return;
 
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -704,7 +931,10 @@ export default function App() {
           // Save and close (same as Cmd+Enter)
           activePanel.save();
         } else {
-          if (activePanelIndex > 0 && handleRecordingPanelClose(activePanelIndex)) {
+          if (
+            activePanelIndex > 0 &&
+            handleRecordingPanelClose(activePanelIndex)
+          ) {
             return;
           }
           activePanel.clear();
@@ -741,14 +971,19 @@ export default function App() {
         if (activePanel.isUserModified() && activePanel.hasContent()) {
           if (closeWarningIndex === activePanelIndex) {
             // Second press — confirm close, discard unsaved content
-            if (closeWarningTimeout.current) clearTimeout(closeWarningTimeout.current);
+            if (closeWarningTimeout.current)
+              clearTimeout(closeWarningTimeout.current);
             setCloseWarningIndex(null);
             closePanel(activePanelIndex);
           } else {
             // First press — show warning
-            if (closeWarningTimeout.current) clearTimeout(closeWarningTimeout.current);
+            if (closeWarningTimeout.current)
+              clearTimeout(closeWarningTimeout.current);
             setCloseWarningIndex(activePanelIndex);
-            closeWarningTimeout.current = setTimeout(() => setCloseWarningIndex(null), 3000);
+            closeWarningTimeout.current = setTimeout(
+              () => setCloseWarningIndex(null),
+              3000,
+            );
           }
         } else {
           closePanel(activePanelIndex);
@@ -772,7 +1007,8 @@ export default function App() {
         e.preventDefault();
         if (!activePanel.getLoadedNoteId()) return;
         if (deleteWarning) {
-          if (deleteWarningTimeout.current) clearTimeout(deleteWarningTimeout.current);
+          if (deleteWarningTimeout.current)
+            clearTimeout(deleteWarningTimeout.current);
           setDeleteWarning(false);
           activePanel.deleteNote().then(() => {
             if (panels.length > 1) {
@@ -782,9 +1018,13 @@ export default function App() {
             }
           });
         } else {
-          if (deleteWarningTimeout.current) clearTimeout(deleteWarningTimeout.current);
+          if (deleteWarningTimeout.current)
+            clearTimeout(deleteWarningTimeout.current);
           setDeleteWarning(true);
-          deleteWarningTimeout.current = setTimeout(() => setDeleteWarning(false), 3000);
+          deleteWarningTimeout.current = setTimeout(
+            () => setDeleteWarning(false),
+            3000,
+          );
         }
         return;
       }
@@ -798,7 +1038,11 @@ export default function App() {
         return;
       }
       // Cmd+L — focus right panel
-      if (e.key === "l" && (e.metaKey || e.ctrlKey) && activePanelIndex < panels.length - 1) {
+      if (
+        e.key === "l" &&
+        (e.metaKey || e.ctrlKey) &&
+        activePanelIndex < panels.length - 1
+      ) {
         e.preventDefault();
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
@@ -851,7 +1095,9 @@ export default function App() {
       }
       // Tab to leave the editor and enter list navigation mode
       const editorFocused = !!document.activeElement?.closest(".cm-editor");
-      const inputFocused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
+      const inputFocused =
+        document.activeElement instanceof HTMLInputElement ||
+        document.activeElement instanceof HTMLTextAreaElement;
       if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && editorFocused) {
         e.preventDefault();
         if (document.activeElement instanceof HTMLElement) {
@@ -861,7 +1107,11 @@ export default function App() {
         return;
       }
       // Cmd+J/K — navigate list up/down
-      if ((e.key === "j" || e.key === "k") && (e.metaKey || e.ctrlKey) && !editorFocused) {
+      if (
+        (e.key === "j" || e.key === "k") &&
+        (e.metaKey || e.ctrlKey) &&
+        !editorFocused
+      ) {
         e.preventDefault();
         activePanel.navigateList(e.key === "j" ? 1 : -1);
         return;
@@ -870,7 +1120,8 @@ export default function App() {
       if (!e.metaKey && !e.ctrlKey && !editorFocused && !inputFocused) {
         if (e.key === "j" || e.key === "k") {
           e.preventDefault();
-          const panelEl = document.querySelectorAll(".panel-container")[activePanelIndex];
+          const panelEl =
+            document.querySelectorAll(".panel-container")[activePanelIndex];
           if (panelEl) {
             panelEl.scrollBy({ top: e.key === "j" ? 100 : -100 });
           }
@@ -893,7 +1144,8 @@ export default function App() {
         }
         if (e.key === "G" && e.shiftKey) {
           e.preventDefault();
-          const panelEl = document.querySelectorAll(".panel-container")[activePanelIndex];
+          const panelEl =
+            document.querySelectorAll(".panel-container")[activePanelIndex];
           if (panelEl) panelEl.scrollTo({ top: panelEl.scrollHeight });
           if (gPendingTimeout.current) {
             clearTimeout(gPendingTimeout.current);
@@ -907,7 +1159,8 @@ export default function App() {
             // Second g press — scroll to top
             clearTimeout(gPendingTimeout.current);
             gPendingTimeout.current = null;
-            const panelEl = document.querySelectorAll(".panel-container")[activePanelIndex];
+            const panelEl =
+              document.querySelectorAll(".panel-container")[activePanelIndex];
             if (panelEl) panelEl.scrollTo({ top: 0 });
           } else {
             // First g press — wait for possible second press
@@ -940,8 +1193,18 @@ export default function App() {
       }
       // Space Space in Vim normal mode (editor focused but not in insert mode)
       // Don't preventDefault on first Space so Vim can still handle <Space>fs etc.
-      if (e.key === " " && !e.metaKey && !e.ctrlKey && editorFocused && !inputFocused) {
-        const inVimNormal = vimEnabled && !!document.activeElement?.closest(".cm-editor")?.querySelector(".cm-vimMode");
+      if (
+        e.key === " " &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        editorFocused &&
+        !inputFocused
+      ) {
+        const inVimNormal =
+          vimEnabled &&
+          !!document.activeElement
+            ?.closest(".cm-editor")
+            ?.querySelector(".cm-vimMode");
         if (inVimNormal) {
           if (spacePendingTimeout.current) {
             // Double space — open search palette
@@ -959,18 +1222,30 @@ export default function App() {
         }
       }
     },
-    [panels, activePanelIndex, closePanel, handleRecordingPanelClose, openNewPanelToRight, findPanelWithNote, openNoteToRight, vimEnabled, closeWarningIndex, deleteWarning, searchPaletteOpen, showSettings, recording, handleStartRecording],
+    [
+      panels,
+      activePanelIndex,
+      closePanel,
+      handleRecordingPanelClose,
+      openNewPanelToRight,
+      findPanelWithNote,
+      openNoteToRight,
+      vimEnabled,
+      closeWarningIndex,
+      deleteWarning,
+      searchPaletteOpen,
+      showSettings,
+      recording,
+      handleStartRecording,
+    ],
   );
 
-  const handleKeyUp = useCallback(
-    (e: KeyboardEvent) => {
-      // Hide hotkeys when Meta/Ctrl is released
-      if (e.key === "Meta" || e.key === "Control") {
-        setShowHotkeys(false);
-      }
-    },
-    [],
-  );
+  const handleKeyUp = useCallback((e: KeyboardEvent) => {
+    // Hide hotkeys when Meta/Ctrl is released
+    if (e.key === "Meta" || e.key === "Control") {
+      setShowHotkeys(false);
+    }
+  }, []);
 
   useEffect(() => {
     // Use capture phase so Backspace is intercepted before CodeMirror
@@ -1029,9 +1304,7 @@ export default function App() {
 
     const setup = async () => {
       try {
-        const { getCurrentWebview } = await import(
-          "@tauri-apps/api/webview"
-        );
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
         const webview = getCurrentWebview();
         const fn = await webview.onDragDropEvent((event) => {
           if (cancelled) return;
@@ -1151,216 +1424,377 @@ export default function App() {
 
   return (
     <>
-    {notesDirBanner ? (
-      <div className="git-banner">
-        <span>Choose notes folder</span>
-        <input
-          className="git-banner-input"
-          type="text"
-          placeholder="~/notes"
-          value={notesDirPath}
-          onChange={(e) => setNotesDirPath(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") handleNotesDirConfirm(); }}
-        />
-        <button className="git-banner-btn connect" onClick={handleNotesDirConfirm}>Continue</button>
-        <button className="git-banner-btn" onClick={handleNotesDirLater}>Later</button>
-      </div>
-    ) : gitBanner && (
-      <div className="git-banner">
-        <span>Set up git sync</span>
-        <input
-          className="git-banner-input"
-          type="text"
-          placeholder="Remote URL (e.g. git@github.com:user/notes.git)"
-          value={gitRemoteUrl}
-          onChange={(e) => setGitRemoteUrl(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") handleGitConnect(); }}
-        />
-        <button className="git-banner-btn connect" onClick={handleGitConnect}>Connect</button>
-        <button className="git-banner-btn" onClick={handleGitDismiss}>Later</button>
-      </div>
-    )}
-    <div className="app-layout" ref={containerRef}>
-      {panels.map((panel, index) => (
-        <Fragment key={panel.id}>
-          {index > 0 && (
-            <DragSplitter
-              onDrag={(delta) => handleDrag(index - 1, delta)}
-              onDragEnd={handleDragEnd}
-            />
-          )}
-          <div
-            className={`panel-container ${activePanelIndex === index ? "focused" : ""}`}
-            style={{ flex: panelWidths[index] }}
+      {notesDirBanner ? (
+        <div className="git-banner">
+          <span>Choose notes folder</span>
+          <input
+            className="git-banner-input"
+            type="text"
+            placeholder="~/notes"
+            value={notesDirPath}
+            onChange={(e) => setNotesDirPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleNotesDirConfirm();
+            }}
+          />
+          <button
+            className="git-banner-btn connect"
+            onClick={handleNotesDirConfirm}
           >
-            <NotePanel
-              ref={setPanelRef(panel.id)}
-              recentNotes={recentNotes}
-              allTags={allTags}
-              onNoteClick={(noteId, metaKey) =>
-                handleNoteClick(index, noteId, metaKey)
-              }
-              onNoteNavigate={(noteId, metaKey) =>
-                handleNoteClick(index, noteId, metaKey)
-              }
-              onSaved={refreshSharedState}
-              onFocus={() => setActivePanelIndex(index)}
-              initialNoteId={panel.initialNoteId}
-              independent={panel.independent}
-              sortBy={sortBy}
-              onSortChange={setSortBy}
-              themeId={themeId}
-              vimEnabled={vimEnabled}
-              onVimToggle={() => setVimEnabled((v) => !v)}
-              recording={recording}
-              processingProgress={processingProgressByPanel[panel.id] ?? null}
-              processingProgressByNote={processingProgressByNote}
-              recordingLocked={recording.active || recordingStartPending}
-              onStartRecording={() => void handleStartRecording(panel.id)}
-              onStopRecording={() => void stopRecording()}
-              isRecordingPanel={panel.id === recordingPanelId}
+            Continue
+          </button>
+          <button className="git-banner-btn" onClick={handleNotesDirLater}>
+            Later
+          </button>
+        </div>
+      ) : (
+        gitBanner && (
+          <div className="git-banner">
+            <span>Set up git sync</span>
+            <input
+              className="git-banner-input"
+              type="text"
+              placeholder="Remote URL (e.g. git@github.com:user/notes.git)"
+              value={gitRemoteUrl}
+              onChange={(e) => setGitRemoteUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleGitConnect();
+              }}
             />
+            <button
+              className="git-banner-btn connect"
+              onClick={handleGitConnect}
+            >
+              Connect
+            </button>
+            <button className="git-banner-btn" onClick={handleGitDismiss}>
+              Later
+            </button>
           </div>
-        </Fragment>
-      ))}
-    </div>
-    <ThemePicker themeId={themeId} onThemeChange={handleThemeChange} />
-      {dropZoneVisible && createPortal(
-        <div className="drop-zone-overlay">
-          <div className="drop-zone-content">Drop .md files to import</div>
-        </div>,
-        document.body,
+        )
       )}
-      {importStatus && createPortal(
-        <div className="import-toast">{importStatus}</div>,
-        document.body,
-      )}
-      {closeWarningIndex !== null && createPortal(
-        <div className="close-warning-toast">Unsaved changes — press <kbd>{primaryModifier}</kbd> <kbd>W</kbd> again to close</div>,
-        document.body,
-      )}
-      {recordingCloseWarningIndex !== null && createPortal(
-        <div className="close-warning-toast">Recording in progress — close again to stop recording and close this panel</div>,
-        document.body,
-      )}
-      {deleteWarning && createPortal(
-        <div className="delete-warning-toast">Delete note? Press <kbd>{primaryModifier}</kbd> <kbd>D</kbd> again to confirm</div>,
-        document.body,
-      )}
-      {gitError && createPortal(
-        <div className="git-error-toast">{gitError}</div>,
-        document.body,
-      )}
-      {meetingReadyToast && createPortal(
-        <div
-          className="import-toast"
-          style={{ cursor: "pointer" }}
-          onClick={() => {
-            const activePanel = panelRefs.current.get(panels[activePanelIndex]?.id);
-            if (activePanel) activePanel.loadNote(meetingReadyToast);
-            setMeetingReadyToast(null);
-          }}
-        >
-          Meeting note ready — click to open
-        </div>,
-        document.body,
-      )}
-      {searchPaletteOpen && createPortal(
-        <SearchPalette
-          recentNotes={recentNotes}
-          onSelect={(noteId, metaKey) => {
-            const activePanel = panelRefs.current.get(panels[activePanelIndex]?.id);
-            if (!activePanel) return;
-            if (metaKey) {
-              // Cmd+Enter / Cmd+Click — open to the side, keep palette open
-              const existingIndex = findPanelWithNote(noteId);
-              if (existingIndex === -1) {
-                openNoteToRight(activePanelIndex, noteId, true, true);
-              }
-            } else {
-              setSearchPaletteOpen(false);
-              const existingIndex = findPanelWithNote(noteId);
-              if (existingIndex !== -1) {
-                setActivePanelIndex(existingIndex);
-              } else if (activePanel.isUserModified() && activePanel.hasContent()) {
-                openNoteToRight(activePanelIndex, noteId, false);
-              } else {
-                activePanel.loadNote(noteId);
-              }
-            }
-          }}
-          onClose={() => setSearchPaletteOpen(false)}
-        />,
-        document.body,
-      )}
-      {toolStatus && (() => {
-        const missingCount = [toolStatus.git, toolStatus.qmd, toolStatus.ollama, toolStatus.ffmpeg, toolStatus.whisper].filter((v) => !v).length;
-        if (missingCount === 0) return null;
-        return createPortal(
-          <button className="tool-status-indicator" onClick={() => setShowSettings(true)}>
-            <span className="tool-missing">{missingCount} tool{missingCount > 1 ? "s" : ""} missing</span>
-          </button>,
-          document.body,
-        );
-      })()}
-      {showSettings && toolStatus && createPortal(
-        <SettingsPanel
-          toolStatus={toolStatus}
-          recordingDevice={recordingDevice}
-          onDeviceChange={handleDeviceChange}
-          onRefreshTools={async () => {
-            try {
-              const status = await checkTools();
-              setToolStatus(status);
-            } catch { /* ignore */ }
-          }}
-          onClose={() => setShowSettings(false)}
-          modelSettings={modelSettings}
-          ollamaModels={ollamaModels}
-          whisperModels={whisperModels}
-          onModelSettingsChange={handleModelSettingsChange}
-          onPullModel={handlePullModel}
-          pullProgress={pullProgress}
-        />,
-        document.body,
-      )}
-      {showHotkeys && createPortal(
-        <div className="hotkeys-overlay">
-          <div className="hotkeys-panel">
-            <div className="hotkeys-title">Keyboard Shortcuts</div>
-            <div className="hotkeys-list">
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>Enter</kbd><span>Save note</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>P</kbd><span>Search notes</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>N</kbd><span>New note</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>E</kbd><span>Edit note</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>S</kbd><span>Star note</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>D</kbd><span>Delete note</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>T</kbd><span>Toggle tags</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>⌫</kbd><span>Go back</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>H</kbd><span>Focus left panel</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>L</kbd><span>Focus right panel</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>W</kbd><span>Close rightmost panel</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>Click</kbd><span>Open in new panel</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>⇧</kbd> <kbd>R</kbd><span>Toggle recording</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>J</kbd><span>Select next note</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>K</kbd><span>Select previous note</span></div>
-              <div className="hotkey-row"><kbd>J</kbd> / <kbd>K</kbd><span>Scroll down / up</span></div>
-              <div className="hotkey-row"><kbd>Space</kbd> <kbd>Space</kbd><span>Search notes</span></div>
-              <div className="hotkey-row"><kbd>Esc</kbd><span>Discard edits / close panel</span></div>
-              <div className="hotkey-row"><kbd>Tab</kbd><span>Exit editor to list</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>+</kbd><span>Zoom in</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>-</kbd><span>Zoom out</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>0</kbd><span>Reset zoom</span></div>
-              <div className="hotkey-row"><kbd>{primaryModifier}</kbd> <kbd>,</kbd><span>Settings</span></div>
-              {isMacOS()
-                ? <div className="hotkey-row"><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd><span>Show shortcuts</span></div>
-                : <div className="hotkey-row"><kbd>Ctrl</kbd> <kbd>/</kbd><span>Show shortcuts</span></div>
-              }
+      <div className="app-layout" ref={containerRef}>
+        {panels.map((panel, index) => (
+          <Fragment key={panel.id}>
+            {index > 0 && (
+              <DragSplitter
+                onDrag={(delta) => handleDrag(index - 1, delta)}
+                onDragEnd={handleDragEnd}
+              />
+            )}
+            <div
+              className={`panel-container ${activePanelIndex === index ? "focused" : ""}`}
+              style={{ flex: panelWidths[index] }}
+            >
+              <NotePanel
+                ref={setPanelRef(panel.id)}
+                recentNotes={recentNotes}
+                allTags={allTags}
+                onNoteClick={(noteId, metaKey) =>
+                  handleNoteClick(index, noteId, metaKey)
+                }
+                onNoteNavigate={(noteId, metaKey) =>
+                  handleNoteClick(index, noteId, metaKey)
+                }
+                onSaved={refreshSharedState}
+                onFocus={() => setActivePanelIndex(index)}
+                initialNoteId={panel.initialNoteId}
+                independent={panel.independent}
+                sortBy={sortBy}
+                onSortChange={setSortBy}
+                themeId={themeId}
+                vimEnabled={vimEnabled}
+                onVimToggle={() => setVimEnabled((v) => !v)}
+                recording={recording}
+                processingProgress={processingProgressByPanel[panel.id] ?? null}
+                processingProgressByNote={processingProgressByNote}
+                recordingLocked={recording.active || recordingStartPending}
+                onStartRecording={() => void handleStartRecording(panel.id)}
+                onStopRecording={() => void stopRecording()}
+                isRecordingPanel={panel.id === recordingPanelId}
+              />
             </div>
-          </div>
+          </Fragment>
+        ))}
+      </div>
+      {dropZoneVisible &&
+        createPortal(
+          <div className="drop-zone-overlay">
+            <div className="drop-zone-content">Drop .md files to import</div>
+          </div>,
+          document.body,
+        )}
+      {importStatus &&
+        createPortal(
+          <div className="import-toast">{importStatus}</div>,
+          document.body,
+        )}
+      {closeWarningIndex !== null &&
+        createPortal(
+          <div className="close-warning-toast">
+            Unsaved changes — press <kbd>{primaryModifier}</kbd> <kbd>W</kbd>{" "}
+            again to close
+          </div>,
+          document.body,
+        )}
+      {recordingCloseWarningIndex !== null &&
+        createPortal(
+          <div className="close-warning-toast">
+            Recording in progress — close again to stop recording and close this
+            panel
+          </div>,
+          document.body,
+        )}
+      {deleteWarning &&
+        createPortal(
+          <div className="delete-warning-toast">
+            Delete note? Press <kbd>{primaryModifier}</kbd> <kbd>D</kbd> again
+            to confirm
+          </div>,
+          document.body,
+        )}
+      {gitError &&
+        createPortal(
+          <div className="git-error-toast">{gitError}</div>,
+          document.body,
+        )}
+      {meetingReadyToast &&
+        createPortal(
+          <div
+            className="import-toast"
+            style={{ cursor: "pointer" }}
+            onClick={() => {
+              const activePanel = panelRefs.current.get(
+                panels[activePanelIndex]?.id,
+              );
+              if (activePanel) activePanel.loadNote(meetingReadyToast);
+              setMeetingReadyToast(null);
+            }}
+          >
+            Meeting note ready — click to open
+          </div>,
+          document.body,
+        )}
+      {searchPaletteOpen &&
+        createPortal(
+          <SearchPalette
+            recentNotes={recentNotes}
+            onSelect={(noteId, metaKey) => {
+              const activePanel = panelRefs.current.get(
+                panels[activePanelIndex]?.id,
+              );
+              if (!activePanel) return;
+              if (metaKey) {
+                // Cmd+Enter / Cmd+Click — open to the side, keep palette open
+                const existingIndex = findPanelWithNote(noteId);
+                if (existingIndex === -1) {
+                  openNoteToRight(activePanelIndex, noteId, true, true);
+                }
+              } else {
+                setSearchPaletteOpen(false);
+                const existingIndex = findPanelWithNote(noteId);
+                if (existingIndex !== -1) {
+                  setActivePanelIndex(existingIndex);
+                } else if (
+                  activePanel.isUserModified() &&
+                  activePanel.hasContent()
+                ) {
+                  openNoteToRight(activePanelIndex, noteId, false);
+                } else {
+                  activePanel.loadNote(noteId);
+                }
+              }
+            }}
+            onClose={() => setSearchPaletteOpen(false)}
+          />,
+          document.body,
+        )}
+      {createPortal(
+        <div className="indicator-bar">
+          <BackgroundJobsIndicator
+            jobs={bgJobs}
+            recording={recording}
+            processingProgressByNote={processingProgressByNote}
+            recentNotes={recentNotes}
+            pullProgress={pullProgress}
+            error={gitError}
+          />
+          {toolStatus &&
+            (() => {
+              const missingCount = [
+                toolStatus.git,
+                toolStatus.qmd,
+                toolStatus.ollama,
+                toolStatus.ffmpeg,
+                toolStatus.whisper,
+              ].filter((v) => !v).length;
+              if (missingCount === 0) return null;
+              return (
+                <button
+                  className="tool-status-indicator"
+                  onClick={() => setShowSettings(true)}
+                >
+                  <span className="tool-missing">
+                    {missingCount} tool{missingCount > 1 ? "s" : ""} missing
+                  </span>
+                </button>
+              );
+            })()}
+          <ThemePicker themeId={themeId} onThemeChange={handleThemeChange} />
         </div>,
         document.body,
       )}
+      {showSettings &&
+        toolStatus &&
+        createPortal(
+          <SettingsPanel
+            toolStatus={toolStatus}
+            recordingDevice={recordingDevice}
+            onDeviceChange={handleDeviceChange}
+            onRefreshTools={async () => {
+              try {
+                const status = await checkTools();
+                setToolStatus(status);
+              } catch {
+                /* ignore */
+              }
+            }}
+            onInstallTool={async (tool) => {
+              try {
+                await openToolInstaller(tool);
+                setImportStatus("Installer opened in Terminal");
+                setTimeout(() => setImportStatus(null), 3000);
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                setGitError(msg);
+                setTimeout(() => setGitError(null), 5000);
+                throw e;
+              }
+            }}
+            onClose={() => setShowSettings(false)}
+            modelSettings={modelSettings}
+            ollamaModels={ollamaModels}
+            whisperModels={whisperModels}
+            onModelSettingsChange={handleModelSettingsChange}
+            onPullModel={handlePullModel}
+            pullProgress={pullProgress}
+          />,
+          document.body,
+        )}
+      {showHotkeys &&
+        createPortal(
+          <div className="hotkeys-overlay">
+            <div className="hotkeys-panel">
+              <div className="hotkeys-title">Keyboard Shortcuts</div>
+              <div className="hotkeys-list">
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>Enter</kbd>
+                  <span>Save note</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>P</kbd>
+                  <span>Search notes</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>N</kbd>
+                  <span>New note</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>E</kbd>
+                  <span>Edit note</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>S</kbd>
+                  <span>Star note</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>D</kbd>
+                  <span>Delete note</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>T</kbd>
+                  <span>Toggle tags</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>⌫</kbd>
+                  <span>Go back</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>H</kbd>
+                  <span>Focus left panel</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>L</kbd>
+                  <span>Focus right panel</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>W</kbd>
+                  <span>Close rightmost panel</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>Click</kbd>
+                  <span>Open in new panel</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>⇧</kbd> <kbd>R</kbd>
+                  <span>Toggle recording</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>J</kbd>
+                  <span>Select next note</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>K</kbd>
+                  <span>Select previous note</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>J</kbd> / <kbd>K</kbd>
+                  <span>Scroll down / up</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>Space</kbd> <kbd>Space</kbd>
+                  <span>Search notes</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>Esc</kbd>
+                  <span>Discard edits / close panel</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>Tab</kbd>
+                  <span>Exit editor to list</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>+</kbd>
+                  <span>Zoom in</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>-</kbd>
+                  <span>Zoom out</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>0</kbd>
+                  <span>Reset zoom</span>
+                </div>
+                <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>,</kbd>
+                  <span>Settings</span>
+                </div>
+                {isMacOS() ? (
+                  <div className="hotkey-row">
+                    <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>+</kbd>
+                    <span>Show shortcuts</span>
+                  </div>
+                ) : (
+                  <div className="hotkey-row">
+                    <kbd>Ctrl</kbd> <kbd>/</kbd>
+                    <span>Show shortcuts</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

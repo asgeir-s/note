@@ -161,17 +161,20 @@ async fn do_sync_once(
     app_handle: &tauri::AppHandle,
     emit_errors: bool,
 ) {
+    emit_sync_status(app_handle, true);
     if let Err(e) = commit_pending_changes(dir, pending).await {
         eprintln!("git_sync: commit failed: {e}");
         if emit_errors {
             emit_error(app_handle, &format!("Git commit failed: {e}"));
         }
+        emit_sync_status(app_handle, false);
         return;
     }
 
     if let Err(e) = sync_with_remote(dir, app_handle, emit_errors).await {
         eprintln!("git_sync: sync failed: {e}");
     }
+    emit_sync_status(app_handle, false);
 }
 
 /// Stage specific files, commit with an auto-generated message.
@@ -820,6 +823,10 @@ fn build_commit_message(changes: &[FileChange]) -> String {
 
 fn emit_error(app_handle: &tauri::AppHandle, message: &str) {
     let _ = app_handle.emit("git-sync-error", message.to_string());
+}
+
+fn emit_sync_status(app_handle: &tauri::AppHandle, active: bool) {
+    let _ = app_handle.emit("git-sync-status", active);
 }
 
 // ── Tauri commands ─────────────────────────────────────────────────

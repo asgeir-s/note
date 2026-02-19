@@ -19,23 +19,23 @@ Capture first, organize never. Notes live as flat markdown files. Structure emer
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (latest stable)
-- [Node.js](https://nodejs.org/) >= 20
+- [Node.js](https://nodejs.org/) >= 22
 - [Git](https://git-scm.com/) (for automatic note version history)
 - System dependencies for Tauri v2 (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
 
-### macOS setup (optional tools)
+### macOS setup (recommended)
 
-Install ffmpeg, whisper-cpp, and ollama for meeting recording and AI features:
+Install runtime tools for installed app features:
 
 ```bash
 npm run setup-macos
 ```
 
-This installs ffmpeg (audio processing), whisper-cpp (transcription), ollama (summarization/auto-tagging), and downloads a whisper model. All are optional — the app works without them but meeting recording requires ffmpeg + whisper-cpp.
+This installs Homebrew Node.js, qmd, ffmpeg, whisper-cpp, ollama, and downloads a whisper model.
 
-### Ubuntu setup (first time only)
+### Ubuntu setup (recommended)
 
-Install Linux system packages required by Tauri:
+Install Linux system/runtime packages for Tauri + app features:
 
 ```bash
 npm run setup-ubuntu
@@ -114,7 +114,7 @@ Record meetings directly in the app, then get an auto-generated note with a summ
 
 Meeting notes live in `meetings/` inside your notes folder. Audio files are in `meetings/.audio/` (git-ignored).
 
-**Required:** `ffmpeg`, `whisper-cpp` (install via `npm run setup-macos`)
+**Required:** `ffmpeg`, `whisper-cpp` (install via setup script)
 **Optional:** `ollama` with a model (for AI summaries — without it you still get the transcript)
 
 ## Slash Commands

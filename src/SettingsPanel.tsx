@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { listInputDevices } from "./api";
-import type { ToolStatus, InputDeviceInfo, ModelSettings, OllamaModelInfo, WhisperModelInfo } from "./api";
+import type { ToolStatus, InputDeviceInfo, ModelSettings, OllamaModelInfo, WhisperModelInfo, InstallToolKey } from "./api";
 
 export interface PullProgress {
   model: string;
@@ -13,6 +13,7 @@ interface SettingsPanelProps {
   recordingDevice: string | null;
   onDeviceChange: (device: string | null) => void;
   onRefreshTools: () => void;
+  onInstallTool: (tool: InstallToolKey) => Promise<void>;
   onClose: () => void;
   modelSettings: ModelSettings;
   ollamaModels: OllamaModelInfo[];
@@ -23,12 +24,34 @@ interface SettingsPanelProps {
 }
 
 const TOOLS = [
-  { key: "git" as const, label: "git", description: "Version control & sync", command: "xcode-select --install" },
-  { key: "ffmpeg" as const, label: "ffmpeg", description: "Audio processing", command: "brew install ffmpeg" },
-  { key: "whisper" as const, label: "whisper-cli", description: "Speech transcription", command: "brew install whisper-cpp" },
-  { key: "ollama" as const, label: "ollama", description: "AI tagging & summaries", command: "brew install ollama" },
-  { key: "qmd" as const, label: "qmd", description: "Related notes search", command: "npm install -g @tobilu/qmd" },
+  { key: "git" as InstallToolKey, label: "git", description: "Version control & sync" },
+  { key: "ffmpeg" as InstallToolKey, label: "ffmpeg", description: "Audio processing" },
+  { key: "whisper" as InstallToolKey, label: "whisper-cli", description: "Speech transcription" },
+  { key: "ollama" as InstallToolKey, label: "ollama", description: "AI tagging & summaries" },
+  { key: "qmd" as InstallToolKey, label: "qmd", description: "Related notes search" },
 ];
+type ToolKey = InstallToolKey;
+
+function getInstallCommand(tool: ToolKey): string {
+  const platform = typeof navigator !== "undefined"
+    ? (navigator.platform || navigator.userAgent || "").toLowerCase()
+    : "";
+  const isMac = platform.includes("mac");
+  const isLinux = platform.includes("linux");
+
+  if (isMac) {
+    if (tool === "git") return "xcode-select --install";
+    return "Opens Terminal and runs setup-macos.sh";
+  }
+
+  if (isLinux) {
+    if (tool === "git") return "sudo apt-get install -y git";
+    return "Opens Terminal and runs setup-ubuntu.sh";
+  }
+
+  if (tool === "git") return "Install git via your OS package manager";
+  return "Opens Terminal and runs the platform setup script";
+}
 
 function formatSize(bytes: number | null): string {
   if (bytes === null || bytes === 0) return "";
@@ -42,6 +65,7 @@ export function SettingsPanel({
   recordingDevice,
   onDeviceChange,
   onRefreshTools,
+  onInstallTool,
   onClose,
   modelSettings,
   ollamaModels,
@@ -52,6 +76,7 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
   const [pullingModel, setPullingModel] = useState<string | null>(null);
+  const [installingTool, setInstallingTool] = useState<ToolKey | null>(null);
 
   useEffect(() => {
     listInputDevices().then(setDevices).catch(() => setDevices([]));
@@ -102,6 +127,15 @@ export function SettingsPanel({
       setPullingModel(null);
     }
   }, [onPullModel]);
+
+  const handleInstallTool = useCallback(async (tool: ToolKey) => {
+    setInstallingTool(tool);
+    try {
+      await onInstallTool(tool);
+    } finally {
+      setInstallingTool(null);
+    }
+  }, [onInstallTool]);
 
   const installedOllama = ollamaModels.filter(m => m.installed);
   const uninstalledOllama = ollamaModels.filter(m => !m.installed);
@@ -219,12 +253,21 @@ export function SettingsPanel({
               </button>
             </div>
             {TOOLS.filter((t) => !toolStatus[t.key]).map((tool) => (
-              <div key={tool.key} className="settings-tool-row">
-                <div className="settings-tool-info">
-                  <span className="settings-tool-name">{tool.label}</span>
-                  <span className="settings-tool-desc">{tool.description}</span>
+              <div key={tool.key} className="settings-install-section">
+                <div className="settings-tool-row">
+                  <div className="settings-tool-info">
+                    <span className="settings-tool-name">{tool.label}</span>
+                    <span className="settings-tool-desc">{tool.description}</span>
+                  </div>
+                  <button
+                    className="settings-model-install-btn"
+                    disabled={installingTool !== null}
+                    onClick={() => handleInstallTool(tool.key)}
+                  >
+                    {installingTool === tool.key ? "Opening..." : "Install"}
+                  </button>
                 </div>
-                <code className="settings-install-cmd">{tool.command}</code>
+                <code className="settings-install-cmd">{getInstallCommand(tool.key)}</code>
               </div>
             ))}
           </div>

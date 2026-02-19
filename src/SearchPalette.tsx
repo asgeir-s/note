@@ -60,11 +60,14 @@ export function SearchPalette({
     [displayedNotes.length],
   );
 
-  const selectCurrent = useCallback((metaKey: boolean) => {
-    if (displayedNotes[activeIndex]) {
-      onSelect(displayedNotes[activeIndex].id, metaKey);
-    }
-  }, [activeIndex, displayedNotes, onSelect]);
+  const selectCurrent = useCallback(
+    (metaKey: boolean) => {
+      if (displayedNotes[activeIndex]) {
+        onSelect(displayedNotes[activeIndex].id, metaKey);
+      }
+    },
+    [activeIndex, displayedNotes, onSelect],
+  );
 
   // Capture-phase keyboard handler
   useEffect(() => {
@@ -75,7 +78,10 @@ export function SearchPalette({
         onClose();
         return;
       }
-      if (e.key === "ArrowDown" || (e.key === "j" && (e.ctrlKey || e.metaKey))) {
+      if (
+        e.key === "ArrowDown" ||
+        (e.key === "j" && (e.ctrlKey || e.metaKey))
+      ) {
         e.preventDefault();
         e.stopPropagation();
         navigate(1);
@@ -101,10 +107,7 @@ export function SearchPalette({
 
   return (
     <div className="search-palette-overlay" onMouseDown={onClose}>
-      <div
-        className="search-palette"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+      <div className="search-palette" onMouseDown={(e) => e.stopPropagation()}>
         <input
           ref={inputRef}
           className="search-palette-input"
@@ -125,6 +128,9 @@ export function SearchPalette({
                 }}
                 onMouseEnter={() => setActiveIndex(i)}
               >
+                {note.tags.includes("meeting") && (
+                  <span className="note-item-meeting">⏺</span>
+                )}
                 <span className="search-palette-title">{note.title}</span>
               </button>
             ))}

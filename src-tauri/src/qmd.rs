@@ -125,7 +125,9 @@ pub(crate) fn enriched_path() -> String {
             }
         }
         if let Some((_, bin)) = best {
-            extra.insert(0, bin.to_string_lossy().to_string());
+            // Keep nvm as a fallback; prefer system-managed locations first for
+            // bundled app runtime consistency.
+            extra.push(bin.to_string_lossy().to_string());
         }
     }
     let mut parts: Vec<&str> = base.split(':').collect();
@@ -144,8 +146,20 @@ pub(crate) fn cmd(program: &str) -> Command {
 }
 
 async fn qmd_available() -> bool {
-    cmd("qmd")
+    // 1) Binary exists and responds.
+    let has_binary = cmd("qmd")
         .arg("--version")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_binary {
+        return false;
+    }
+
+    // 2) Runtime is healthy (native modules load, DB can be opened).
+    cmd("qmd")
+        .args(["collection", "list"])
         .output()
         .await
         .map(|o| o.status.success())
@@ -183,7 +197,7 @@ async fn run_worker(
     ollama_model: String,
 ) {
     if !qmd_available().await {
-        eprintln!("qmd: not installed, entering drain mode");
+        eprintln!("qmd: unavailable (missing or runtime-broken), entering drain mode");
         // Drain all messages silently.
         while rx.recv().await.is_some() {}
         return;
@@ -442,8 +456,12 @@ fn build_maps(app_handle: &tauri::AppHandle) -> (HashMap<String, String>, HashMa
 /// Returns (query_string, parsed_keywords) — keywords are only Some when ollama was called
 /// (used for auto-tagging notes that have no tags).
 async fn build_query(dir: &Path, title: &str, rel_path: Option<&String>, tags: &[String], has_ollama: bool, ollama_model: &str) -> (String, Option<Vec<String>>) {
-    // If the note already has tags, use them as the query — no need for ollama.
-    if !tags.is_empty() {
+    let is_meeting_note = tags.iter().any(|t| t.as_str() == "meeting");
+
+    // For non-meeting notes, existing tags are enough and we skip ollama extraction.
+    // For meeting notes, we still extract keywords so they can be appended as topic tags,
+    // even if the user already added some tags manually while processing.
+    if !is_meeting_note && !tags.is_empty() {
         let tag_str = tags.join(", ");
         return (tag_str, None);
     }
