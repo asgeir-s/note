@@ -774,10 +774,18 @@ fn import_inbox_from_worker(dir: &Path, app_handle: &tauri::AppHandle) -> Result
     let dir_str = dir.to_string_lossy().to_string();
 
     if let Some(state) = app_handle.try_state::<AppState>() {
-        let mut index = state.index.lock().map_err(|e| e.to_string())?;
-        let imported = crate::notes::import_inbox_markdown(&dir_str, &mut index)
-            .map_err(|e| format!("import inbox markdown failed: {e}"))?;
-        return Ok(imported.len());
+        let imported = {
+            let mut index = state.index.lock().map_err(|e| e.to_string())?;
+            crate::notes::import_inbox_markdown(&dir_str, &mut index)
+                .map_err(|e| format!("import inbox markdown failed: {e}"))?
+        };
+        let count = imported.len();
+        if let Ok(qmd) = state.qmd.lock() {
+            for meta in &imported {
+                qmd.notify_change(&meta.id, &meta.title);
+            }
+        }
+        return Ok(count);
     }
 
     Ok(0)

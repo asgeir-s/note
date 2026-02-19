@@ -230,6 +230,9 @@ fn import_markdown_file(
     };
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.notify_change(&meta.path, &meta.title, true);
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_change(&meta.id, &meta.title);
+    }
     Ok(meta)
 }
 
