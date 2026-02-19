@@ -550,7 +550,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               </span>
             </button>
           ) : effectiveProcessingProgress ? (
-            <span className="recording-progress" style={{ marginLeft: "auto" }}>{effectiveProcessingProgress}</span>
+            <span className="recording-progress-text" style={{ marginLeft: "auto" }}>{effectiveProcessingProgress.replace(/\.+$/, "")}<span className="related-loading"> ...</span></span>
           ) : tags.includes("meeting") && loadedNoteId ? null : (
             <button className="record-btn" onClick={onStartRecording} disabled={!!recordingLocked} title="Record" style={{ marginLeft: "auto" }}>
               ●

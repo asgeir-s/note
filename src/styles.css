@@ -1367,15 +1367,17 @@ body {
   line-height: 1;
   font-family: var(--font);
   color: #d44;
-  background: color-mix(in srgb, #d44 8%, transparent);
-  border: 1px solid color-mix(in srgb, #d44 25%, transparent);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 50%;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  opacity: 0.15;
+  transition: background 0.15s, border-color 0.15s, opacity 0.25s;
 }
 
 .record-btn:hover {
+  opacity: 1;
   background: color-mix(in srgb, #d44 15%, transparent);
   border-color: color-mix(in srgb, #d44 40%, transparent);
 }
@@ -1386,6 +1388,7 @@ body {
 }
 
 .record-btn.recording {
+  opacity: 1;
   width: auto;
   height: auto;
   padding: 3px 10px;
@@ -1443,18 +1446,9 @@ body {
 }
 
 /* Recording progress indicator */
-.recording-progress {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
+.recording-progress-text {
   font-size: 12px;
-  font-weight: 500;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-radius: 12px;
-  animation: pulse 1.2s ease-in-out infinite;
+  color: var(--fg-muted, #888);
 }
 
 /* Meeting view toggle */

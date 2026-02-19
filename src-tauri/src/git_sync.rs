@@ -246,57 +246,87 @@ async fn do_pull_and_reindex(
 
     let target = resolve_sync_target(dir).await?;
     if !remote_ref_exists(dir, &target.remote_ref).await {
+        let imported = import_inbox_from_worker(dir, app_handle)?;
+        if imported > 0 {
+            commit_leftover_sync_files(dir).await?;
+            rebuild_index_from_worker(dir, app_handle)?;
+            return Ok(true);
+        }
         return Ok(false);
     }
 
+    let mut changed = false;
     let (_, behind) = ahead_behind(dir, &target.remote_ref).await?;
-    if behind == 0 {
-        return Ok(false);
+    if behind > 0 {
+        // Capture any note/index edits that may have been made outside the normal
+        // debounced change queue so rebase can proceed without user intervention.
+        commit_leftover_sync_files(dir).await?;
+
+        if let Err(rebase_err) = git(
+            dir,
+            &[
+                "-c",
+                "rebase.autoStash=true",
+                "rebase",
+                &target.remote_ref,
+            ],
+        )
+        .await
+        {
+            if !is_conflict_error(&rebase_err) {
+                let _ = git(dir, &["rebase", "--abort"]).await;
+                let msg = format!(
+                    "Git sync pull failed from {}: {}",
+                    target.remote_ref,
+                    rebase_err.trim()
+                );
+                if emit_errors {
+                    emit_error(app_handle, &msg);
+                }
+                return Err(msg);
+            }
+
+            if let Err(resolve_err) = resolve_conflicts_keep_both(dir).await {
+                let _ = git(dir, &["rebase", "--abort"]).await;
+                let msg = format!(
+                    "Git sync conflict auto-resolution failed for {}: {}",
+                    target.remote_ref,
+                    resolve_err.trim()
+                );
+                if emit_errors {
+                    emit_error(app_handle, &msg);
+                }
+                return Err(msg);
+            }
+
+            if let Err(continue_err) = continue_rebase_keep_both(dir).await {
+                let _ = git(dir, &["rebase", "--abort"]).await;
+                let msg = format!(
+                    "Git sync conflict auto-resolution could not finish for {}: {}",
+                    target.remote_ref,
+                    continue_err.trim()
+                );
+                if emit_errors {
+                    emit_error(app_handle, &msg);
+                }
+                return Err(msg);
+            }
+        }
+
+        changed = true;
     }
 
-    if let Err(rebase_err) = git(dir, &["rebase", &target.remote_ref]).await {
-        if !is_conflict_error(&rebase_err) {
-            let _ = git(dir, &["rebase", "--abort"]).await;
-            let msg = format!(
-                "Git sync pull failed from {}: {}",
-                target.remote_ref,
-                rebase_err.trim()
-            );
-            if emit_errors {
-                emit_error(app_handle, &msg);
-            }
-            return Err(msg);
-        }
-
-        if let Err(resolve_err) = resolve_conflicts_keep_both(dir).await {
-            let _ = git(dir, &["rebase", "--abort"]).await;
-            let msg = format!(
-                "Git sync conflict auto-resolution failed for {}: {}",
-                target.remote_ref,
-                resolve_err.trim()
-            );
-            if emit_errors {
-                emit_error(app_handle, &msg);
-            }
-            return Err(msg);
-        }
-
-        if let Err(continue_err) = continue_rebase_keep_both(dir).await {
-            let _ = git(dir, &["rebase", "--abort"]).await;
-            let msg = format!(
-                "Git sync conflict auto-resolution could not finish for {}: {}",
-                target.remote_ref,
-                continue_err.trim()
-            );
-            if emit_errors {
-                emit_error(app_handle, &msg);
-            }
-            return Err(msg);
-        }
+    let imported = import_inbox_from_worker(dir, app_handle)?;
+    if imported > 0 {
+        commit_leftover_sync_files(dir).await?;
+        changed = true;
     }
 
-    rebuild_index_from_worker(dir, app_handle)?;
-    Ok(true)
+    if changed {
+        rebuild_index_from_worker(dir, app_handle)?;
+    }
+
+    Ok(changed)
 }
 
 /// Push local commits if local is ahead of remote.
@@ -676,8 +706,11 @@ async fn ensure_git_repo(dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("write .gitignore: {e}"))?;
     }
 
+    ensure_inbox_keep_file(dir)?;
+
     // Stage .gitignore and any existing .md files.
     let _ = git(dir, &["add", ".gitignore"]).await;
+    let _ = git(dir, &["add", "inbox/.gitkeep"]).await;
     let _ = git(dir, &["add", "*.md"]).await;
 
     // Initial commit (only if there's something staged).
@@ -691,8 +724,11 @@ async fn ensure_git_repo(dir: &Path) -> Result<(), String> {
 
 /// On startup, commit any .md files that might have been left uncommitted after a crash.
 async fn commit_leftover_md(dir: &Path) -> Result<(), String> {
+    ensure_inbox_keep_file(dir)?;
+
     // Stage all .md files — `git add` is a no-op for unchanged files.
     let _ = git(dir, &["add", "*.md"]).await;
+    let _ = git(dir, &["add", "inbox/.gitkeep"]).await;
     let _ = git(dir, &["add", ".dump-index.json"]).await;
 
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
@@ -700,6 +736,51 @@ async fn commit_leftover_md(dir: &Path) -> Result<(), String> {
         git(dir, &["commit", "-m", "Auto-commit: recover unsaved changes"]).await?;
     }
     Ok(())
+}
+
+fn ensure_inbox_keep_file(dir: &Path) -> Result<(), String> {
+    let inbox_dir = dir.join("inbox");
+    std::fs::create_dir_all(&inbox_dir)
+        .map_err(|e| format!("create inbox dir {}: {e}", inbox_dir.display()))?;
+
+    let keep_file = inbox_dir.join(".gitkeep");
+    if !keep_file.exists() {
+        std::fs::write(&keep_file, "")
+            .map_err(|e| format!("write keep file {}: {e}", keep_file.display()))?;
+    }
+
+    Ok(())
+}
+
+async fn commit_leftover_sync_files(dir: &Path) -> Result<(), String> {
+    // Stage notes and sync artifacts that the app may update outside the normal
+    // save flow (for example index/cache rebuilds).
+    let _ = git(dir, &["add", "*.md"]).await;
+    let _ = git(dir, &["add", "meetings/*.md"]).await;
+    let _ = git(dir, &["add", "-A", "inbox"]).await;
+    let _ = git(dir, &["add", ".dump-index.json"]).await;
+    let _ = git(dir, &["add", ".dump-related.json"]).await;
+
+    let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
+    if diff.is_err() {
+        git(dir, &["commit", "-m", "Auto-commit: local changes before sync"])
+            .await?;
+    }
+
+    Ok(())
+}
+
+fn import_inbox_from_worker(dir: &Path, app_handle: &tauri::AppHandle) -> Result<usize, String> {
+    let dir_str = dir.to_string_lossy().to_string();
+
+    if let Some(state) = app_handle.try_state::<AppState>() {
+        let mut index = state.index.lock().map_err(|e| e.to_string())?;
+        let imported = crate::notes::import_inbox_markdown(&dir_str, &mut index)
+            .map_err(|e| format!("import inbox markdown failed: {e}"))?;
+        return Ok(imported.len());
+    }
+
+    Ok(0)
 }
 
 fn build_commit_message(changes: &[FileChange]) -> String {
@@ -804,7 +885,7 @@ pub async fn set_git_remote(
     let remote_ref = format!("origin/{branch}");
     if remote_ref_exists(&dir, &remote_ref).await {
         let pull_res = if has_local_commit(&dir).await && git(&dir, &["merge-base", "HEAD", &remote_ref]).await.is_ok() {
-            git(&dir, &["pull", "--rebase", "origin", &branch]).await
+            git(&dir, &["pull", "--rebase", "--autostash", "origin", &branch]).await
         } else {
             git(
                 &dir,

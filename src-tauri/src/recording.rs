@@ -453,7 +453,7 @@ fn capture_audio(
         if let Some(output_device) = host.default_output_device() {
             eprintln!(
                 "recording: capturing system audio from output device: {}",
-                output_device.name().unwrap_or_default()
+                output_device.description().map(|d| d.name().to_owned()).unwrap_or_default()
             );
             record_loopback(&output_device, &system_path_owned, system_stop, Some(system_level))?;
         }
@@ -475,7 +475,7 @@ fn capture_audio(
 
     eprintln!(
         "recording: using mic device: {}",
-        mic_device.name().unwrap_or_default()
+        mic_device.description().map(|d| d.name().to_owned()).unwrap_or_default()
     );
 
     record_device(&mic_device, mic_path, stop, Some(mic_level))?;
@@ -506,7 +506,7 @@ pub fn list_input_devices() -> Vec<InputDeviceInfo> {
     let host = cpal::default_host();
     let default_name = host
         .default_input_device()
-        .and_then(|d| d.name().ok())
+        .and_then(|d| d.description().map(|desc| desc.name().to_owned()).ok())
         .unwrap_or_default();
 
     let devices = match host.input_devices() {
@@ -517,7 +517,7 @@ pub fn list_input_devices() -> Vec<InputDeviceInfo> {
     devices
         .into_iter()
         .filter_map(|device| {
-            let name = device.name().ok()?;
+            let name = device.description().map(|d| d.name().to_owned()).ok()?;
             let lower = name.to_lowercase();
             if lower.contains("loopback") || lower.contains("virtual") {
                 return None;
@@ -535,7 +535,7 @@ fn find_device_by_name(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
     host.input_devices().ok()?.find(|d| {
-        d.name().ok().as_deref() == Some(name)
+        d.description().map(|desc| desc.name().to_owned()).ok().as_deref() == Some(name)
     })
 }
 
@@ -557,7 +557,7 @@ fn pick_best_input_device(host: &cpal::Host) -> Result<cpal::Device, String> {
     // Dedicated USB mics (SoloCast, Yeti, etc.) > webcam mics > monitor mics > built-in.
     let mut best: Option<(i32, cpal::Device)> = None;
     for device in devices {
-        let name = device.name().unwrap_or_default().to_lowercase();
+        let name = device.description().map(|d| d.name().to_owned()).unwrap_or_default().to_lowercase();
 
         // Skip non-mic devices (virtual, loopback, display output).
         if name.contains("loopback") || name.contains("virtual") {

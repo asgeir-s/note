@@ -894,6 +894,51 @@ pub fn import_markdown_file(
     Ok(meta)
 }
 
+/// Import markdown files from notes_dir/inbox into the normal notes directory.
+/// Imported files are removed from inbox after successful conversion.
+pub fn import_inbox_markdown(
+    notes_dir: &str,
+    index: &mut NoteIndex,
+) -> io::Result<Vec<NoteMetadata>> {
+    let inbox_dir = Path::new(notes_dir).join("inbox");
+    if !inbox_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let patterns = [
+        format!("{}/inbox/*.md", notes_dir),
+        format!("{}/inbox/**/*.md", notes_dir),
+    ];
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut sources: Vec<PathBuf> = Vec::new();
+    for pattern in &patterns {
+        if let Ok(entries) = glob::glob(pattern) {
+            for entry in entries.flatten() {
+                if !entry.is_file() {
+                    continue;
+                }
+                let key = entry.to_string_lossy().to_string();
+                if seen.insert(key) {
+                    sources.push(entry);
+                }
+            }
+        }
+    }
+
+    sources.sort();
+
+    let mut imported: Vec<NoteMetadata> = Vec::new();
+    for source in sources {
+        let source_path = source.to_string_lossy().to_string();
+        let meta = import_markdown_file(notes_dir, &source_path, index)?;
+        fs::remove_file(&source)?;
+        imported.push(meta);
+    }
+
+    Ok(imported)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1075,6 +1120,32 @@ mod tests {
         let results = search_notes(&dir, "apple", &index).unwrap();
         // Should appear only once despite matching both fuzzy title and content
         assert_eq!(results.iter().filter(|r| r.title == "Apple pie recipe").count(), 1);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_import_inbox_markdown() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+
+        let inbox = Path::new(&dir).join("inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let source = inbox.join("phone-note.md");
+        fs::write(&source, "# Inbox note\n\nFrom phone").unwrap();
+
+        let imported = import_inbox_markdown(&dir, &mut index).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert!(!source.exists());
+
+        let meta = &imported[0];
+        let imported_file = Path::new(&dir).join(&meta.path);
+        assert!(imported_file.exists());
+
+        let raw = fs::read_to_string(imported_file).unwrap();
+        let (fm, body) = parse_frontmatter(&raw);
+        assert!(fm.is_some());
+        assert!(body.contains("From phone"));
 
         fs::remove_dir_all(&dir).ok();
     }
