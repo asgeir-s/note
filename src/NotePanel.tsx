@@ -69,6 +69,7 @@ interface NotePanelProps {
   onStartRecording?: () => void;
   onStopRecording?: () => void;
   isRecordingPanel?: boolean;
+  onBgJob?: (key: string, label: string | null, noteId?: string) => void;
 }
 
 export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
@@ -94,6 +95,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       onStartRecording,
       onStopRecording,
       isRecordingPanel,
+      onBgJob,
     },
     ref,
   ) => {
@@ -571,6 +573,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const handleRetranscribeNote = useCallback(async () => {
       if (!loadedNoteId || retranscribingNote) return;
       setRetranscribingNote(true);
+      const jobKey = `retranscribe-${loadedNoteId}`;
+      onBgJob?.(jobKey, "Retranscribing", loadedNoteId);
       try {
         await retranscribeNote(loadedNoteId);
         const noteContent = await getNote(loadedNoteId);
@@ -581,12 +585,15 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         console.error("Failed to retranscribe:", e);
       } finally {
         setRetranscribingNote(false);
+        onBgJob?.(jobKey, null);
       }
-    }, [loadedNoteId, retranscribingNote, onSaved]);
+    }, [loadedNoteId, retranscribingNote, onSaved, onBgJob]);
 
     const handleResummarizeNote = useCallback(async () => {
       if (!loadedNoteId || resummarizingNote) return;
       setResummarizingNote(true);
+      const jobKey = `resummarize-${loadedNoteId}`;
+      onBgJob?.(jobKey, "Resummarizing", loadedNoteId);
       try {
         await resummarizeNote(loadedNoteId);
         const noteContent = await getNote(loadedNoteId);
@@ -597,8 +604,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         console.error("Failed to resummarize:", e);
       } finally {
         setResummarizingNote(false);
+        onBgJob?.(jobKey, null);
       }
-    }, [loadedNoteId, resummarizingNote, onSaved]);
+    }, [loadedNoteId, resummarizingNote, onSaved, onBgJob]);
 
     // Auto-generate tags when opening a saved note that has no tags yet.
     useEffect(() => {

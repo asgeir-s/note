@@ -255,6 +255,21 @@ export default function App() {
     }
   }, [sortBy]);
 
+  const handleBgJob = useCallback(
+    (key: string, label: string | null, noteId?: string) => {
+      setBgJobs((prev) => {
+        const next = new Map(prev);
+        if (label) {
+          next.set(key, { label, noteId });
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   const checkGitSetup = useCallback(async () => {
     try {
       const remote = await getGitRemote();
@@ -1503,6 +1518,7 @@ export default function App() {
                 onStartRecording={() => void handleStartRecording(panel.id)}
                 onStopRecording={() => void stopRecording()}
                 isRecordingPanel={panel.id === recordingPanelId}
+                onBgJob={handleBgJob}
               />
             </div>
           </Fragment>
