@@ -9,7 +9,7 @@ import {
 import { EditorState, Compartment, Transaction } from "@codemirror/state";
 import { EditorView, drawSelection, keymap, placeholder, ViewUpdate } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { defaultKeymap, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { history } from "@codemirror/commands";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
@@ -290,7 +290,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(
           vimCompartment.current.of(vimEnabled ? vim() : []),
           drawSelection(),
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
           markdown({ base: markdownLanguage }),
           highlightCompartment.current.of(syntaxHighlighting(normalHighlightStyle)),
           themeCompartment.current.of(editorTheme),

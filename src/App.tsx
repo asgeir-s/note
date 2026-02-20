@@ -1093,19 +1093,10 @@ export default function App() {
         }
         return;
       }
-      // Tab to leave the editor and enter list navigation mode
       const editorFocused = !!document.activeElement?.closest(".cm-editor");
       const inputFocused =
         document.activeElement instanceof HTMLInputElement ||
         document.activeElement instanceof HTMLTextAreaElement;
-      if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && editorFocused) {
-        e.preventDefault();
-        if (document.activeElement instanceof HTMLElement) {
-          document.activeElement.blur();
-        }
-        activePanel.navigateList(1);
-        return;
-      }
       // Cmd+J/K — navigate list up/down
       if (
         (e.key === "j" || e.key === "k") &&

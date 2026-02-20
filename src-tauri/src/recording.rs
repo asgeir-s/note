@@ -1189,11 +1189,8 @@ pub async fn summarize(transcript: &str, summary_model_override: Option<&str>) -
 
     eprintln!("recording: summarizing with model {model}");
 
-    // Truncate transcript to ~4000 chars for the prompt.
-    let truncated: String = transcript.chars().take(4000).collect();
-
     // Detect language by checking for common Norwegian words.
-    let lower = truncated.to_lowercase();
+    let lower = transcript.to_lowercase();
     let norwegian_markers = [" og ", " er ", " det ", " som ", " har ", " med ", " for ", " på ", " til ", " ikke "];
     let english_markers = [" the ", " and ", " is ", " that ", " have ", " with ", " for ", " this ", " not ", " are "];
     let no_score: usize = norwegian_markers.iter().filter(|w| lower.contains(*w)).count();
@@ -1203,12 +1200,12 @@ pub async fn summarize(transcript: &str, summary_model_override: Option<&str>) -
     let prompt = if is_norwegian {
         format!(
             "Oppsummer dette møtetranskriptet med hovedpunkter, beslutninger og oppgaver. Bruk markdown-formatering. Skriv kun på norsk.\n\n{}",
-            truncated
+            transcript
         )
     } else {
         format!(
             "Summarize this meeting transcript into key points, decisions, and action items. Use markdown formatting.\n\n{}",
-            truncated
+            transcript
         )
     };
 
