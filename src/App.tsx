@@ -154,6 +154,7 @@ export default function App() {
   const dragStartWidths = useRef<number[]>([]);
   const prevActivePanelRef = useRef(0);
   const pendingFocusPanelId = useRef<string | null>(firstPanelId);
+  const closeRequestInFlight = useRef(false);
 
   const setActivePanelIndex = useCallback(
     (next: number | ((prev: number) => number)) => {
@@ -1280,6 +1281,53 @@ export default function App() {
       window.removeEventListener("keyup", handleKeyUp);
     };
   }, [handleKeyDown, handleKeyUp]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    const setup = async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const appWindow = getCurrentWindow();
+        const fn = await appWindow.onCloseRequested(async (event) => {
+          event.preventDefault();
+          if (closeRequestInFlight.current) return;
+          closeRequestInFlight.current = true;
+
+          try {
+            const currentPanels = panels
+              .map((panel) => panelRefs.current.get(panel.id))
+              .filter((panel): panel is PanelHandle => !!panel);
+
+            for (const panel of currentPanels) {
+              await panel.saveIfNeeded(true);
+            }
+
+            await appWindow.destroy();
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            setGitError(msg);
+            setTimeout(() => setGitError(null), 5000);
+            closeRequestInFlight.current = false;
+          }
+        });
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      } catch {
+        // Not in Tauri environment
+      }
+    };
+
+    void setup();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [panels]);
 
   // Drag-and-drop import — use a ref so the listener doesn't need to re-subscribe
   const handleImportRef = useRef<(paths: string[]) => Promise<void>>(null!);

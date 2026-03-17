@@ -37,11 +37,16 @@ function generateId(): string {
   });
 }
 
+export interface SaveNoteOptions {
+  deferProcessing?: boolean;
+}
+
 export async function saveNote(
   id: string | null,
   content: string,
   tags: string[],
   title?: string | null,
+  options: SaveNoteOptions = {},
 ): Promise<NoteMetadata> {
   if (isTauri()) {
     return invoke<NoteMetadata>("save_note", {
@@ -49,6 +54,7 @@ export async function saveNote(
       content,
       tags,
       title: title ?? null,
+      deferProcessing: options.deferProcessing ?? false,
     });
   }
   // Fallback for web dev

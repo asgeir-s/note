@@ -244,8 +244,10 @@ fn save_note(
     content: String,
     tags: Vec<String>,
     title: Option<String>,
+    defer_processing: Option<bool>,
 ) -> Result<NoteMetadata, String> {
     let is_new = id.is_none();
+    let defer_processing = defer_processing.unwrap_or(false);
     // Get old tags before saving to detect changes.
     let old_tags = id.as_ref().and_then(|existing_id| {
         state
@@ -261,10 +263,14 @@ fn save_note(
     };
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.notify_change(&meta.path, &meta.title, is_new);
+    drop(git);
     // Only notify QMD when tags changed or it's a new note (needs auto-tagging).
     let tags_changed = is_new || old_tags.as_ref() != Some(&tags);
     if tags_changed {
-        if let Ok(qmd) = state.qmd.lock() {
+        if defer_processing {
+            let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
+            qmd::defer_note_processing(&dir, &meta.id, &meta.title);
+        } else if let Ok(qmd) = state.qmd.lock() {
             qmd.notify_change(&meta.id, &meta.title);
         }
     }

@@ -31,6 +31,7 @@ export interface PanelHandle {
   clear: () => void;
   focusEditor: () => void;
   ensureRecordingNote: () => Promise<string>;
+  saveIfNeeded: (deferProcessing?: boolean) => Promise<boolean>;
   isUserModified: () => boolean;
   hasContent: () => boolean;
   getLoadedNoteId: () => string | null;
@@ -129,6 +130,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const initialLoadDone = useRef(false);
     const historyRef = useRef<(string | null)[]>([]);
     const loadedNoteIdRef = useRef<string | null>(null);
+    const savedContentRef = useRef("");
+    const savedTitleRef = useRef("");
     const savedTagsRef = useRef<string[]>([]);
     const titleManuallyEditedRef = useRef(false);
     const autoTagAttemptedRef = useRef<Set<string>>(new Set());
@@ -153,6 +156,42 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       tagsRef.current = tags;
     }, [tags]);
 
+    const resolveCurrentTags = useCallback((flushPending: boolean) => {
+      let nextTags = tagsRef.current;
+      if (flushPending) {
+        const pendingTag = tagInputRef.current?.flush();
+        if (pendingTag && !nextTags.includes(pendingTag)) {
+          nextTags = [...nextTags, pendingTag];
+          tagsRef.current = nextTags;
+          setTags(nextTags);
+        }
+      }
+      return nextTags;
+    }, []);
+
+    const hasUnsavedChanges = useCallback(
+      (flushPendingTags: boolean) => {
+        const currentTags = resolveCurrentTags(flushPendingTags);
+        const currentContent = contentRef.current;
+        const currentTitle = titleRef.current;
+
+        if (!loadedNoteIdRef.current) {
+          return (
+            currentContent.trim().length > 0 ||
+            currentTitle.trim().length > 0 ||
+            currentTags.length > 0
+          );
+        }
+
+        return (
+          currentContent !== savedContentRef.current ||
+          currentTitle !== savedTitleRef.current ||
+          JSON.stringify(currentTags) !== JSON.stringify(savedTagsRef.current)
+        );
+      },
+      [resolveCurrentTags],
+    );
+
     const isAutoMeetingTitle = useCallback((value: string) => {
       return value === "Meeting about" || value.startsWith("Meeting about ");
     }, []);
@@ -168,11 +207,16 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
           const note = await getNote(noteId);
           setContent(note.content);
+          contentRef.current = note.content;
           setTitle(note.title);
+          titleRef.current = note.title;
           titleManuallyEditedRef.current = false;
           setLoadedNoteId(note.id);
           loadedNoteIdRef.current = note.id;
           setTags(note.tags);
+          tagsRef.current = note.tags;
+          savedContentRef.current = note.content;
+          savedTitleRef.current = note.title;
           savedTagsRef.current = note.tags;
           setStarred(note.starred);
           setUserModified(false);
@@ -192,11 +236,16 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
 
     const clearPanel = useCallback(() => {
       setContent("");
+      contentRef.current = "";
       setTitle("");
+      titleRef.current = "";
       titleManuallyEditedRef.current = false;
       setLoadedNoteId(null);
       loadedNoteIdRef.current = null;
       setTags([]);
+      tagsRef.current = [];
+      savedContentRef.current = "";
+      savedTitleRef.current = "";
       savedTagsRef.current = [];
       setStarred(false);
       setPrecomputedRelated([]);
@@ -207,31 +256,75 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       editorRef.current?.clear();
     }, []);
 
-    const handleSave = useCallback(async () => {
-      if (!content.trim()) return;
-      try {
-        const isNew = !loadedNoteId;
+    const persistNote = useCallback(
+      async ({
+        keepEditing = false,
+        allowEmpty = false,
+        deferProcessing = false,
+      }: {
+        keepEditing?: boolean;
+        allowEmpty?: boolean;
+        deferProcessing?: boolean;
+      } = {}) => {
+        const contentNow = contentRef.current;
+        const titleNow = titleRef.current;
+        const tagsNow = resolveCurrentTags(true);
+        const noteIdNow = loadedNoteIdRef.current;
+        const canSave =
+          allowEmpty ||
+          !!noteIdNow ||
+          contentNow.trim().length > 0 ||
+          titleNow.trim().length > 0 ||
+          tagsNow.length > 0;
+
+        if (!canSave) return null;
+
+        const isNew = !noteIdNow;
         const tagsChanged =
           isNew ||
-          JSON.stringify(tags) !== JSON.stringify(savedTagsRef.current);
-        const meta = await saveNote(loadedNoteId, content, tags, title || null);
+          JSON.stringify(tagsNow) !== JSON.stringify(savedTagsRef.current);
+        const meta = await saveNote(noteIdNow, contentNow, tagsNow, titleNow || null, {
+          deferProcessing,
+        });
         setTitle(meta.title);
+        titleRef.current = meta.title;
         titleManuallyEditedRef.current = false;
         setLoadedNoteId(meta.id);
         loadedNoteIdRef.current = meta.id;
-        savedTagsRef.current = tags;
-        setUserModified(false);
+        tagsRef.current = tagsNow;
+        savedContentRef.current = contentNow;
+        savedTitleRef.current = meta.title;
+        savedTagsRef.current = tagsNow;
+        setStarred(meta.starred);
+        setUserModified(keepEditing);
         if (tagsChanged) {
           setRelatedLoading(true);
         }
         await onSaved();
-        if (document.activeElement instanceof HTMLElement) {
+        return meta;
+      },
+      [onSaved, resolveCurrentTags],
+    );
+
+    const saveIfNeeded = useCallback(
+      async (deferProcessing: boolean = false) => {
+        if (!hasUnsavedChanges(true)) return false;
+        await persistNote({ deferProcessing });
+        return true;
+      },
+      [hasUnsavedChanges, persistNote],
+    );
+
+    const handleSave = useCallback(async () => {
+      try {
+        const saved = await saveIfNeeded(false);
+        if (saved && document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
       } catch (e) {
         console.error("Failed to save note:", e);
       }
-    }, [content, title, loadedNoteId, tags, onSaved]);
+    }, [saveIfNeeded]);
 
     const displayedNotes = useMemo(() => {
       // Existing note (viewing or editing) — show precomputed related
@@ -263,6 +356,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               }
               if (changed) {
                 setTags(merged);
+                tagsRef.current = merged;
                 savedTagsRef.current = merged;
               }
               if (
@@ -272,6 +366,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                 note.title !== titleRef.current
               ) {
                 setTitle(note.title);
+                titleRef.current = note.title;
+                savedTitleRef.current = note.title;
               }
             } catch (e) {
               console.error("Failed to refresh note tags:", e);
@@ -292,25 +388,16 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
 
           // Recording must be tied to this panel's note, even if it's a new/empty note.
           // Persist once to get a stable note ID, but keep editing mode in this panel.
-          const contentNow = contentRef.current;
-          const tagsNow = tagsRef.current;
-          const titleNow = titleRef.current;
-          const shouldStayEditing = true;
-          const meta = await saveNote(
-            null,
-            contentNow,
-            tagsNow,
-            titleNow || null,
-          );
-          setTitle(meta.title);
-          titleManuallyEditedRef.current = false;
-          setLoadedNoteId(meta.id);
-          loadedNoteIdRef.current = meta.id;
-          savedTagsRef.current = tagsNow;
-          setUserModified(shouldStayEditing);
-          await onSaved();
+          const meta = await persistNote({
+            keepEditing: true,
+            allowEmpty: true,
+          });
+          if (!meta) {
+            throw new Error("Failed to persist note for recording");
+          }
           return meta.id;
         },
+        saveIfNeeded,
         edit: () => {
           setUserModified(true);
           requestAnimationFrame(() =>
@@ -336,10 +423,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         goBack: async () => {
           if (historyRef.current.length === 0) return;
           const prevId = historyRef.current.pop()!;
-          if (userModified && content.trim()) {
+          if (hasUnsavedChanges(true)) {
             try {
-              await saveNote(loadedNoteId, content, tags, title || null);
-              await onSaved();
+              await persistNote();
             } catch (e) {
               console.error("Failed to save note:", e);
             }
@@ -425,9 +511,14 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
             );
             const note = await getNote(noteIdNow);
             setContent(note.content);
+            contentRef.current = note.content;
             setTitle(meta.title);
+            titleRef.current = meta.title;
             titleManuallyEditedRef.current = false;
             setTags(meta.tags);
+            tagsRef.current = meta.tags;
+            savedContentRef.current = note.content;
+            savedTitleRef.current = meta.title;
             savedTagsRef.current = meta.tags;
             setUserModified(shouldStayEditing);
             await onSaved();
@@ -441,16 +532,15 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         loadNoteInternal,
         clearPanel,
         handleSave,
+        saveIfNeeded,
         userModified,
         loadedNoteId,
-        content,
-        title,
-        tags,
-        onSaved,
         displayedNotes,
         highlightIndex,
         onNoteClick,
         isAutoMeetingTitle,
+        hasUnsavedChanges,
+        persistNote,
       ],
     );
 
@@ -531,7 +621,14 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     }, []);
 
     const handleChange = useCallback((value: string) => {
+      contentRef.current = value;
       setContent(value);
+      setUserModified(true);
+    }, []);
+
+    const handleTagsChange = useCallback((nextTags: string[]) => {
+      tagsRef.current = nextTags;
+      setTags(nextTags);
       setUserModified(true);
     }, []);
 
@@ -554,6 +651,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           const updated = await regenerateTags(noteId);
           if (loadedNoteIdRef.current !== noteId) return;
           setTags(updated.tags);
+          tagsRef.current = updated.tags;
           savedTagsRef.current = updated.tags;
           await onSaved();
         } catch (e) {
@@ -579,6 +677,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         await retranscribeNote(loadedNoteId);
         const noteContent = await getNote(loadedNoteId);
         setContent(noteContent.content);
+        contentRef.current = noteContent.content;
+        savedContentRef.current = noteContent.content;
         setMeetingView("transcript");
         await onSaved();
       } catch (e) {
@@ -598,6 +698,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         await resummarizeNote(loadedNoteId);
         const noteContent = await getNote(loadedNoteId);
         setContent(noteContent.content);
+        contentRef.current = noteContent.content;
+        savedContentRef.current = noteContent.content;
         setMeetingView("summary");
         await onSaved();
       } catch (e) {
@@ -629,43 +731,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         {showTagInput && (
           <div
             className="metadata-panel"
-            onKeyDown={async (e) => {
+            onKeyDown={(e) => {
               if (e.key === "Enter" && e.metaKey) {
                 e.preventDefault();
-                const pending = tagInputRef.current?.flush();
                 setShowTagInput(false);
-                if (pending) {
-                  // flush() updates React state (async), but handleSave
-                  // captures the old tags.  Save directly with the
-                  // updated tag list.
-                  const updatedTags = tags.includes(pending)
-                    ? tags
-                    : [...tags, pending];
-                  setTags(updatedTags);
-                  if (!content.trim()) return;
-                  try {
-                    const meta = await saveNote(
-                      loadedNoteId,
-                      content,
-                      updatedTags,
-                      title || null,
-                    );
-                    setTitle(meta.title);
-                    titleManuallyEditedRef.current = false;
-                    setLoadedNoteId(meta.id);
-                    loadedNoteIdRef.current = meta.id;
-                    savedTagsRef.current = updatedTags;
-                    setUserModified(false);
-                    setRelatedLoading(true);
-                    await onSaved();
-                    if (document.activeElement instanceof HTMLElement)
-                      document.activeElement.blur();
-                  } catch (err) {
-                    console.error("Failed to save note:", err);
-                  }
-                } else {
-                  handleSave();
-                }
+                void handleSave();
               }
             }}
           >
@@ -676,6 +746,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
               value={title}
               onChange={(e) => {
                 setTitle(e.target.value);
+                titleRef.current = e.target.value;
                 titleManuallyEditedRef.current = true;
                 setUserModified(true);
               }}
@@ -685,7 +756,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                 ref={tagInputRef}
                 tags={tags}
                 allTags={allTags}
-                onChange={setTags}
+                onChange={handleTagsChange}
               />
               {loadedNoteId && (
                 <button

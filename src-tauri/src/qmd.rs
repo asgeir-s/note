@@ -10,6 +10,7 @@ use tokio::time::{Duration, Instant};
 
 const DEBOUNCE: Duration = Duration::from_secs(5);
 const REINDEX_INTERVAL: Duration = Duration::from_secs(300);
+const STARTUP_PENDING_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelatedEntry {
@@ -50,6 +51,7 @@ impl QmdHandle {
         let (tx, rx) = mpsc::unbounded_channel();
         let dir = PathBuf::from(notes_dir);
         let cache_path = dir.join(".dump-related.json");
+        let initial_pending = load_pending(&pending_path(&dir));
 
         let cache = load_cache(&cache_path);
         let cache = Arc::new(RwLock::new(cache));
@@ -57,7 +59,7 @@ impl QmdHandle {
 
         let model = keyword_model.unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
         tauri::async_runtime::spawn(async move {
-            run_worker(rx, dir, app_handle, worker_cache, model).await;
+            run_worker(rx, dir, app_handle, worker_cache, model, initial_pending).await;
         });
 
         Self { tx, cache }
@@ -88,6 +90,13 @@ impl QmdHandle {
     }
 }
 
+pub fn defer_note_processing(notes_dir: &str, id: &str, title: &str) {
+    let path = pending_path(Path::new(notes_dir));
+    let mut pending = load_pending(&path);
+    pending.insert(id.to_string(), title.to_string());
+    save_pending(&path, &pending);
+}
+
 fn load_cache(path: &Path) -> RelatedCache {
     std::fs::read_to_string(path)
         .ok()
@@ -97,6 +106,27 @@ fn load_cache(path: &Path) -> RelatedCache {
 
 fn save_cache(path: &Path, cache: &RelatedCache) {
     if let Ok(json) = serde_json::to_string_pretty(cache) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn pending_path(notes_dir: &Path) -> PathBuf {
+    notes_dir.join(".dump-qmd-pending.json")
+}
+
+fn load_pending(path: &Path) -> HashMap<String, String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_pending(path: &Path, pending: &HashMap<String, String>) {
+    if pending.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    if let Ok(json) = serde_json::to_string_pretty(pending) {
         let _ = std::fs::write(path, json);
     }
 }
@@ -201,6 +231,7 @@ async fn run_worker(
     app_handle: tauri::AppHandle,
     cache: Arc<RwLock<RelatedCache>>,
     ollama_model: String,
+    mut pending: HashMap<String, String>,
 ) {
     if !qmd_available().await {
         eprintln!("qmd: unavailable (missing or runtime-broken), entering drain mode");
@@ -242,8 +273,12 @@ async fn run_worker(
     }
 
     let cache_path = dir.join(".dump-related.json");
-    let mut pending: HashMap<String, String> = HashMap::new();
-    let mut deadline: Option<Instant> = None;
+    let pending_path = pending_path(&dir);
+    let mut deadline = if pending.is_empty() {
+        None
+    } else {
+        Some(Instant::now() + STARTUP_PENDING_DELAY)
+    };
     let mut last_reindex = Instant::now();
 
     loop {
@@ -251,7 +286,7 @@ async fn run_worker(
             tokio::select! {
                 msg = rx.recv() => msg,
                 _ = tokio::time::sleep_until(dl) => {
-                    process_pending(&dir, &mut pending, &cache, &cache_path, &app_handle, has_ollama, &ollama_model).await;
+                    process_pending(&dir, &mut pending, &pending_path, &cache, &cache_path, &app_handle, has_ollama, &ollama_model).await;
                     deadline = None;
                     last_reindex = Instant::now();
                     continue;
@@ -274,10 +309,12 @@ async fn run_worker(
         match msg {
             Some(Msg::NoteChanged { id, title }) => {
                 pending.insert(id, title);
+                save_pending(&pending_path, &pending);
                 deadline = Some(Instant::now() + DEBOUNCE);
             }
             Some(Msg::NoteDeleted { id }) => {
                 pending.remove(&id);
+                save_pending(&pending_path, &pending);
                 let mut c = cache.write().await;
                 c.relations.remove(&id);
                 // Prune deleted note from other notes' lists.
@@ -288,33 +325,11 @@ async fn run_worker(
                 let _ = app_handle.emit("related-notes-changed", ());
             }
             Some(Msg::Shutdown) => {
-                if !pending.is_empty() {
-                    process_pending(
-                        &dir,
-                        &mut pending,
-                        &cache,
-                        &cache_path,
-                        &app_handle,
-                        has_ollama,
-                        &ollama_model,
-                    )
-                    .await;
-                }
+                save_pending(&pending_path, &pending);
                 break;
             }
             None => {
-                if !pending.is_empty() {
-                    process_pending(
-                        &dir,
-                        &mut pending,
-                        &cache,
-                        &cache_path,
-                        &app_handle,
-                        has_ollama,
-                        &ollama_model,
-                    )
-                    .await;
-                }
+                save_pending(&pending_path, &pending);
                 break;
             }
         }
@@ -324,6 +339,7 @@ async fn run_worker(
 async fn process_pending(
     dir: &Path,
     pending: &mut HashMap<String, String>,
+    pending_path: &Path,
     cache: &Arc<RwLock<RelatedCache>>,
     cache_path: &Path,
     app_handle: &tauri::AppHandle,
@@ -342,7 +358,10 @@ async fn process_pending(
         eprintln!("qmd: embed failed: {e}");
     }
 
-    let items: Vec<(String, String)> = pending.drain().collect();
+    let items: Vec<(String, String)> = pending
+        .iter()
+        .map(|(id, title)| (id.clone(), title.clone()))
+        .collect();
 
     let processing_ids: Vec<&str> = items.iter().map(|(id, _)| id.as_str()).collect();
     let _ = app_handle.emit("qmd-processing", processing_ids);
@@ -459,6 +478,8 @@ async fn process_pending(
         let _ = app_handle.emit("notes-changed", ());
     }
     let _ = app_handle.emit("related-notes-changed", ());
+    pending.clear();
+    save_pending(pending_path, pending);
 }
 
 /// Normalize a filename for fuzzy matching: collapse runs of `_` and `-` into a single `-`.
