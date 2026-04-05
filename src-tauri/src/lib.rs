@@ -8,7 +8,7 @@ use notes::{NoteIndex, NoteMetadata};
 use qmd::QmdHandle;
 use recording::RecordingHandle;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, RunEvent, State};
 
@@ -17,6 +17,61 @@ pub struct ModelSettings {
     pub keyword_model: Option<String>,
     pub summary_model: Option<String>,
     pub whisper_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AppSettings {
+    notes_dir: Option<String>,
+}
+
+fn default_notes_dir() -> String {
+    format!("{}/dump", dirs_home())
+}
+
+fn app_settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve app config directory: {e}"))?;
+    Ok(dir.join("settings.json"))
+}
+
+fn load_app_settings_from_path(path: &Path) -> AppSettings {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn load_app_settings(app_handle: &tauri::AppHandle) -> AppSettings {
+    app_settings_path(app_handle)
+        .ok()
+        .map(|path| load_app_settings_from_path(&path))
+        .unwrap_or_default()
+}
+
+fn save_app_settings_to_path(path: &Path, settings: &AppSettings) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("serialize app settings: {e}"))?;
+    std::fs::write(path, json).map_err(|e| format!("write app settings: {e}"))
+}
+
+fn save_app_settings(app_handle: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
+    let path = app_settings_path(app_handle)?;
+    save_app_settings_to_path(&path, settings)
+}
+
+fn resolve_notes_dir(settings: &AppSettings) -> String {
+    settings
+        .notes_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(default_notes_dir)
 }
 
 fn model_settings_path(notes_dir: &str) -> std::path::PathBuf {
@@ -182,6 +237,14 @@ fn set_notes_dir(
     path: String,
 ) -> Result<(), String> {
     notes::ensure_storage_layout(&path).map_err(|e| e.to_string())?;
+    let new_index = notes::rebuild_index(&path).map_err(|e| e.to_string())?;
+    let new_model_settings = load_model_settings(&path);
+    save_app_settings(
+        &app_handle,
+        &AppSettings {
+            notes_dir: Some(path.clone()),
+        },
+    )?;
 
     // Flush and shut down the old git worker.
     let old_git = {
@@ -209,7 +272,7 @@ fn set_notes_dir(
     // Rebuild index for new directory.
     {
         let mut index = state.index.lock().map_err(|e| e.to_string())?;
-        *index = notes::rebuild_index(&path).map_err(|e| e.to_string())?;
+        *index = new_index;
     }
 
     // Start and store a new git worker for the new directory.
@@ -218,7 +281,6 @@ fn set_notes_dir(
     *git = new_git;
 
     // Reload model settings for new directory.
-    let new_model_settings = load_model_settings(&path);
     {
         let mut ms = state.model_settings.lock().map_err(|e| e.to_string())?;
         *ms = new_model_settings.clone();
@@ -749,27 +811,30 @@ async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let home = dirs_home();
-    let default_dir = format!("{}/dump", home);
-    let _ = notes::ensure_storage_layout(&default_dir);
-
-    let index = notes::rebuild_index(&default_dir).unwrap_or_default();
-
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let model_settings = load_model_settings(&default_dir);
-            let git = GitSyncHandle::new(&default_dir, handle.clone());
+            let default_dir = default_notes_dir();
+            let saved_settings = load_app_settings(&handle);
+            let mut notes_dir = resolve_notes_dir(&saved_settings);
+            if notes::ensure_storage_layout(&notes_dir).is_err() {
+                notes_dir = default_dir;
+                let _ = notes::ensure_storage_layout(&notes_dir);
+            }
+
+            let index = notes::rebuild_index(&notes_dir).unwrap_or_default();
+            let model_settings = load_model_settings(&notes_dir);
+            let git = GitSyncHandle::new(&notes_dir, handle.clone());
             let qmd = QmdHandle::new(
-                &default_dir,
+                &notes_dir,
                 handle.clone(),
                 model_settings.keyword_model.clone(),
             );
             let rec = RecordingHandle::new(handle);
             app.manage(AppState {
-                notes_dir: Mutex::new(default_dir),
+                notes_dir: Mutex::new(notes_dir),
                 index: Mutex::new(index),
                 git: Mutex::new(git),
                 qmd: Mutex::new(qmd),
@@ -839,4 +904,39 @@ fn dirs_home() -> String {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_settings_round_trip_persists_notes_dir() {
+        let temp_dir = std::env::temp_dir().join(format!("dump-settings-{}", uuid::Uuid::new_v4()));
+        let settings_path = temp_dir.join("settings.json");
+        let settings = AppSettings {
+            notes_dir: Some("/tmp/custom-notes".to_string()),
+        };
+
+        save_app_settings_to_path(&settings_path, &settings).unwrap();
+
+        let loaded = load_app_settings_from_path(&settings_path);
+        assert_eq!(loaded.notes_dir.as_deref(), Some("/tmp/custom-notes"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn resolve_notes_dir_falls_back_to_default_for_missing_or_blank_values() {
+        assert_eq!(
+            resolve_notes_dir(&AppSettings::default()),
+            default_notes_dir()
+        );
+        assert_eq!(
+            resolve_notes_dir(&AppSettings {
+                notes_dir: Some("   ".to_string()),
+            }),
+            default_notes_dir()
+        );
+    }
 }
