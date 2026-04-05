@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { isPinnedNotePath } from "./api";
 import type { NoteMetadata, SortBy } from "./api";
 
 interface NotesListProps {
@@ -9,6 +10,7 @@ interface NotesListProps {
   highlightIndex?: number;
   sortBy: SortBy;
   onSortChange: (sortBy: SortBy) => void;
+  tabs?: { label: string; active: boolean; onClick: () => void }[];
 }
 
 function relativeTime(dateStr: string): string {
@@ -36,6 +38,7 @@ export function NotesList({
   highlightIndex = -1,
   sortBy,
   onSortChange,
+  tabs,
 }: NotesListProps) {
   const highlightRef = useRef<HTMLButtonElement>(null);
 
@@ -45,39 +48,63 @@ export function NotesList({
 
   if (notes.length === 0 && !loading) return null;
 
-  const isRecent = label === "Recent";
-
   return (
     <div className="notes-list">
       <div className="notes-list-header">
-        <span>
-          {label}
-          {loading && <span className="related-loading"> ...</span>}
-        </span>
-        {isRecent && (
-          <button
-            className="sort-toggle"
-            onClick={() =>
-              onSortChange(sortBy === "created" ? "modified" : "created")
-            }
-          >
-            {sortBy === "created" ? "Created" : "Updated"}
-          </button>
+        {tabs ? (
+          <div className="notes-list-tabs">
+            {tabs.map((tab) => (
+              <button
+                key={tab.label}
+                className={`notes-tab ${tab.active ? "active" : ""}`}
+                onClick={tab.onClick}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span>
+            {label}
+            {loading && <span className="related-loading"> ...</span>}
+          </span>
         )}
+        <button
+          className="sort-toggle"
+          onClick={() =>
+            onSortChange(sortBy === "created" ? "modified" : "created")
+          }
+        >
+          {sortBy === "created" ? "Created" : "Updated"}
+        </button>
       </div>
       {notes.map((note, i) => {
-        const showDivider = i > 0 && notes[i - 1].starred && !note.starred;
         return (
           <div key={note.id}>
-            {showDivider && <div className="starred-divider" />}
             <button
               ref={i === highlightIndex ? highlightRef : undefined}
               className={`note-item ${i === highlightIndex ? "highlighted" : ""}`}
               onClick={(e) => onOpenNote(note.id, e.metaKey || e.ctrlKey)}
             >
               <span className="note-item-title">
-                {note.starred && (
-                  <span className="note-item-star">{"\u2605"}</span>
+                {isPinnedNotePath(note.path) && (
+                  <span className="note-item-pin">
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      xmlns="http://www.w3.org/2000/svg"
+                      aria-hidden="true"
+                    >
+                      <line x1="12" x2="12" y1="17" y2="22" />
+                      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                    </svg>
+                  </span>
                 )}
                 {note.tags.includes("meeting") && (
                   <span className="note-item-meeting">⏺</span>

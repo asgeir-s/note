@@ -15,18 +15,17 @@ pub struct NoteMetadata {
     pub created: String,
     pub modified: String,
     pub tags: Vec<String>,
-    pub starred: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteContent {
     pub id: String,
+    pub path: String,
     pub title: String,
     pub content: String,
     pub tags: Vec<String>,
     pub created: String,
     pub modified: String,
-    pub starred: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -43,6 +42,149 @@ struct Frontmatter {
     modified: Option<String>,
     tags: Option<Vec<String>>,
     starred: Option<bool>,
+}
+
+pub const NOTES_COLLECTION_DIR: &str = "notes";
+pub const PINNED_COLLECTION_DIR: &str = "pinned";
+pub const MEETINGS_REL_DIR: &str = "notes/meetings";
+pub const MEETING_AUDIO_REL_DIR: &str = "notes/meetings/.audio";
+
+pub fn notes_collection_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(NOTES_COLLECTION_DIR)
+}
+
+pub fn pinned_collection_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(PINNED_COLLECTION_DIR)
+}
+
+pub fn meetings_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(MEETINGS_REL_DIR)
+}
+
+pub fn meeting_audio_dir(root_dir: &str) -> PathBuf {
+    Path::new(root_dir).join(MEETING_AUDIO_REL_DIR)
+}
+
+pub fn note_abspath(root_dir: &str, rel_path: &str) -> PathBuf {
+    Path::new(root_dir).join(rel_path)
+}
+
+pub fn is_pinned_path(path: &str) -> bool {
+    path == PINNED_COLLECTION_DIR || path.starts_with("pinned/")
+}
+
+pub fn is_meeting_path(path: &str) -> bool {
+    path.starts_with("notes/meetings/")
+}
+
+fn normalize_rel_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn collision_safe_dest_path(dest: &Path) -> PathBuf {
+    if !dest.exists() {
+        return dest.to_path_buf();
+    }
+
+    let parent = dest
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let stem = dest
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("note");
+    let ext = dest.extension().and_then(|s| s.to_str());
+
+    for i in 1..=9_999 {
+        let candidate_name = match ext {
+            Some(ext) if !ext.is_empty() => format!("{stem}-migrated-{i}.{ext}"),
+            _ => format!("{stem}-migrated-{i}"),
+        };
+        let candidate = parent.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    // Extremely unlikely fallback if all numbered variants are taken.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let fallback = match ext {
+        Some(ext) if !ext.is_empty() => format!("{stem}-migrated-{nanos}.{ext}"),
+        _ => format!("{stem}-migrated-{nanos}"),
+    };
+    parent.join(fallback)
+}
+
+fn move_path(src: &Path, dest: &Path) -> io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match fs::rename(src, dest) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            fs::copy(src, dest)?;
+            fs::remove_file(src)?;
+            Ok(())
+        }
+    }
+}
+
+fn move_dir_contents(src: &Path, dest: &Path) -> io::Result<()> {
+    if !src.exists() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(dest)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            move_dir_contents(&from, &to)?;
+            let _ = fs::remove_dir(&from);
+        } else {
+            let target = collision_safe_dest_path(&to);
+            move_path(&from, &target)?;
+        }
+    }
+
+    let _ = fs::remove_dir(src);
+    Ok(())
+}
+
+pub fn ensure_storage_layout(root_dir: &str) -> io::Result<()> {
+    let root = Path::new(root_dir);
+    fs::create_dir_all(root)?;
+
+    let notes_dir = notes_collection_dir(root_dir);
+    let pinned_dir = pinned_collection_dir(root_dir);
+    fs::create_dir_all(&notes_dir)?;
+    fs::create_dir_all(&pinned_dir)?;
+
+    let legacy_meetings = root.join("meetings");
+    if legacy_meetings.exists() {
+        move_dir_contents(&legacy_meetings, &notes_dir.join("meetings"))?;
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        let dest = collision_safe_dest_path(&notes_dir.join(entry.file_name()));
+        move_path(&path, &dest)?;
+    }
+
+    Ok(())
 }
 
 /// Parse frontmatter and body from markdown content
@@ -191,7 +333,6 @@ fn build_frontmatter(
     created: &str,
     modified: &str,
     tags: &[String],
-    starred: bool,
     title: Option<&str>,
     extra: Option<&Mapping>,
 ) -> String {
@@ -211,9 +352,6 @@ fn build_frontmatter(
     if !tags.is_empty() {
         let seq: Vec<Value> = tags.iter().map(|t| Value::String(t.clone())).collect();
         map.insert(Value::String("tags".into()), Value::Sequence(seq));
-    }
-    if starred {
-        map.insert(Value::String("starred".into()), Value::Bool(true));
     }
 
     // Merge extra fields (skip known keys)
@@ -247,7 +385,6 @@ pub fn save_note(
     let now: DateTime<Local> = Local::now();
     let note_id: String;
     let created: String;
-    let starred: bool;
     let file_path: PathBuf;
     let extra: Option<Mapping>;
 
@@ -258,8 +395,7 @@ pub fn save_note(
         note_id = existing_id.clone();
         if let Some(existing) = index.notes.get(&existing_id) {
             created = existing.created.clone();
-            starred = existing.starred;
-            file_path = Path::new(notes_dir).join(&existing.path);
+            file_path = note_abspath(notes_dir, &existing.path);
             // Read existing file to preserve extra frontmatter fields
             extra = if file_path.exists() {
                 let raw = fs::read_to_string(&file_path).unwrap_or_default();
@@ -270,23 +406,21 @@ pub fn save_note(
             };
         } else {
             created = now.to_rfc3339();
-            starred = false;
             extra = None;
             let timestamp = now.format("%Y%m%d%H%M%S").to_string();
             let slug = slugify(&title);
             let filename = format!("{}-{}.md", timestamp, slug);
-            file_path = Path::new(notes_dir).join(&filename);
+            file_path = notes_collection_dir(notes_dir).join(&filename);
         }
     } else {
         // New note
         note_id = Uuid::new_v4().to_string();
         created = now.to_rfc3339();
-        starred = false;
         extra = None;
         let timestamp = now.format("%Y%m%d%H%M%S").to_string();
         let slug = slugify(&title);
         let filename = format!("{}-{}.md", timestamp, slug);
-        file_path = Path::new(notes_dir).join(&filename);
+        file_path = notes_collection_dir(notes_dir).join(&filename);
     }
 
     let modified = now.to_rfc3339();
@@ -295,19 +429,23 @@ pub fn save_note(
         &created,
         &modified,
         tags,
-        starred,
         Some(&title),
         extra.as_ref(),
     );
     let full_content = format!("{}{}", frontmatter, content);
 
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::write(&file_path, &full_content)?;
 
-    let filename = file_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    let filename = normalize_rel_path(
+        file_path
+            .strip_prefix(notes_dir)
+            .unwrap_or(&file_path),
+    )
+    .trim_start_matches('/')
+    .to_string();
 
     let meta = NoteMetadata {
         id: note_id.clone(),
@@ -316,7 +454,6 @@ pub fn save_note(
         created,
         modified,
         tags: tags.to_vec(),
-        starred,
     };
 
     index.notes.insert(note_id, meta.clone());
@@ -341,7 +478,7 @@ pub fn append_meeting_data(
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
         .clone();
 
-    let file_path = Path::new(notes_dir).join(&meta.path);
+    let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (raw_yaml, body) = parse_raw_yaml(&raw);
 
@@ -373,7 +510,6 @@ pub fn append_meeting_data(
         &meta.created,
         &modified,
         &tags,
-        meta.starred,
         Some(&title),
         raw_yaml.as_ref(),
     );
@@ -398,7 +534,7 @@ pub fn get_note_transcript(notes_dir: &str, id: &str, index: &NoteIndex) -> io::
         .notes
         .get(id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?;
-    let file_path = Path::new(notes_dir).join(&meta.path);
+    let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (_, body) = parse_raw_yaml(&raw);
     let transcript = extract_section(&body, "## Transcript")
@@ -418,7 +554,7 @@ pub fn replace_meeting_transcript(
         .get(id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
         .clone();
-    let file_path = Path::new(notes_dir).join(&meta.path);
+    let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (raw_yaml, body) = parse_raw_yaml(&raw);
 
@@ -442,7 +578,7 @@ pub fn replace_meeting_summary(
         .get(id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
         .clone();
-    let file_path = Path::new(notes_dir).join(&meta.path);
+    let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (raw_yaml, body) = parse_raw_yaml(&raw);
 
@@ -482,7 +618,6 @@ fn write_meeting_section(
         &meta.created,
         &modified,
         &meta.tags,
-        meta.starred,
         Some(&meta.title),
         raw_yaml.as_ref(),
     );
@@ -495,44 +630,6 @@ fn write_meeting_section(
     };
     index.notes.insert(meta.id.clone(), updated.clone());
     save_index(notes_dir, index)?;
-    Ok(updated)
-}
-
-/// Toggle the starred state of a note
-pub fn toggle_star(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Result<NoteMetadata> {
-    let meta = index
-        .notes
-        .get(id)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
-        .clone();
-
-    let new_starred = !meta.starred;
-
-    // Read the file, preserving extra frontmatter fields
-    let file_path = Path::new(notes_dir).join(&meta.path);
-    let raw = fs::read_to_string(&file_path)?;
-    let (raw_yaml, body) = parse_raw_yaml(&raw);
-
-    let frontmatter = build_frontmatter(
-        &meta.id,
-        &meta.created,
-        &meta.modified,
-        &meta.tags,
-        new_starred,
-        Some(&meta.title),
-        raw_yaml.as_ref(),
-    );
-    let full_content = format!("{}{}", frontmatter, body);
-    fs::write(&file_path, &full_content)?;
-
-    let updated = NoteMetadata {
-        starred: new_starred,
-        ..meta
-    };
-
-    index.notes.insert(id.to_string(), updated.clone());
-    save_index(notes_dir, index)?;
-
     Ok(updated)
 }
 
@@ -556,7 +653,7 @@ pub fn set_auto_tags(
     }
 
     let is_meeting_note =
-        meta.tags.iter().any(|t| t == "meeting") || meta.path.starts_with("meetings/");
+        meta.tags.iter().any(|t| t == "meeting") || is_meeting_path(&meta.path);
 
     // Normal flow:
     // - For regular notes, only auto-tag when empty.
@@ -595,7 +692,7 @@ pub fn set_auto_tags(
     }
 
     // Read the file and update frontmatter with new tags
-    let file_path = Path::new(notes_dir).join(&meta.path);
+    let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (raw_yaml, body) = parse_raw_yaml(&raw);
 
@@ -604,7 +701,6 @@ pub fn set_auto_tags(
         &meta.created,
         &meta.modified,
         &next_tags,
-        meta.starred,
         Some(&next_title),
         raw_yaml.as_ref(),
     );
@@ -631,7 +727,7 @@ pub fn delete_note(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Resu
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
         .clone();
 
-    let file_path = Path::new(notes_dir).join(&meta.path);
+    let file_path = note_abspath(notes_dir, &meta.path);
     if file_path.exists() {
         fs::remove_file(&file_path)?;
     }
@@ -649,32 +745,48 @@ pub fn get_note(notes_dir: &str, id: &str, index: &NoteIndex) -> io::Result<Note
         .get(id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?;
 
-    let file_path = Path::new(notes_dir).join(&meta.path);
+    let file_path = note_abspath(notes_dir, &meta.path);
     let raw = fs::read_to_string(&file_path)?;
     let (_fm, body) = parse_frontmatter(&raw);
 
     Ok(NoteContent {
         id: meta.id.clone(),
+        path: meta.path.clone(),
         title: meta.title.clone(),
         content: body,
         tags: meta.tags.clone(),
         created: meta.created.clone(),
         modified: meta.modified.clone(),
-        starred: meta.starred,
     })
 }
 
-/// List recent notes sorted by the given field descending, starred pinned to top
 pub fn list_recent_notes(index: &NoteIndex, limit: usize, sort_by: &str) -> Vec<NoteMetadata> {
-    let mut notes: Vec<&NoteMetadata> = index.notes.values().collect();
+    let mut notes: Vec<&NoteMetadata> = index
+        .notes
+        .values()
+        .filter(|meta| !is_pinned_path(&meta.path))
+        .collect();
+    sort_note_refs(&mut notes, sort_by);
+    notes.into_iter().take(limit).cloned().collect()
+}
+
+pub fn list_pinned_notes(index: &NoteIndex, sort_by: &str) -> Vec<NoteMetadata> {
+    let mut notes: Vec<&NoteMetadata> = index
+        .notes
+        .values()
+        .filter(|meta| is_pinned_path(&meta.path))
+        .collect();
+    sort_note_refs(&mut notes, sort_by);
+    notes.into_iter().cloned().collect()
+}
+
+fn sort_note_refs(notes: &mut Vec<&NoteMetadata>, sort_by: &str) {
     notes.sort_by(|a, b| {
-        // Starred notes first
-        b.starred.cmp(&a.starred).then_with(|| match sort_by {
+        match sort_by {
             "modified" => b.modified.cmp(&a.modified),
             _ => b.created.cmp(&a.created),
-        })
+        }
     });
-    notes.into_iter().take(limit).cloned().collect()
 }
 
 /// Fuzzy-match `query` against `target` by walking query chars in order through target.
@@ -762,7 +874,18 @@ pub fn search_notes(
         }
     }
 
-    Ok(merged.into_iter().take(20).collect())
+    let mut references = Vec::new();
+    let mut regular = Vec::new();
+    for meta in merged {
+        if is_pinned_path(&meta.path) {
+            references.push(meta);
+        } else {
+            regular.push(meta);
+        }
+    }
+    references.extend(regular);
+
+    Ok(references.into_iter().take(20).collect())
 }
 
 /// Fallback content search using simple substring matching
@@ -777,7 +900,7 @@ fn content_search_fallback(notes_dir: &str, query: &str, index: &NoteIndex) -> V
     let mut results: Vec<NoteMetadata> = Vec::new();
 
     for meta in index.notes.values() {
-        let file_path = Path::new(notes_dir).join(&meta.path);
+        let file_path = note_abspath(notes_dir, &meta.path);
         if let Ok(content) = fs::read_to_string(&file_path) {
             let content_lower = content.to_lowercase();
             let matches = terms.iter().any(|term| content_lower.contains(term));
@@ -792,13 +915,61 @@ fn content_search_fallback(notes_dir: &str, query: &str, index: &NoteIndex) -> V
 }
 
 /// Try to search using qmd
+fn resolve_qmd_result_path(path: &str, index: &NoteIndex) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let raw = if let Some(rest) = trimmed.strip_prefix("qmd://") {
+        rest.trim_start_matches('/')
+    } else {
+        trimmed
+    };
+
+    let (collection, rel) = raw.split_once('/')?;
+    let collection = collection.trim_matches('/');
+    let rel = rel.trim_start_matches('/');
+    if collection.is_empty() || rel.is_empty() {
+        return None;
+    }
+
+    let direct = format!("{collection}/{rel}");
+    if index.notes.values().any(|meta| meta.path == direct) {
+        return Some(direct);
+    }
+
+    if let Some((source_path, _chunk)) = rel.rsplit_once('/') {
+        let source = if source_path.ends_with(".md") {
+            source_path.to_string()
+        } else {
+            format!("{source_path}.md")
+        };
+        let candidate = format!("{collection}/{source}");
+        if index.notes.values().any(|meta| meta.path == candidate) {
+            return Some(candidate);
+        }
+    }
+
+    let file_name = Path::new(rel)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(rel);
+    index
+        .notes
+        .values()
+        .find(|meta| meta.path.ends_with(file_name))
+        .map(|meta| meta.path.clone())
+}
+
 fn search_with_qmd(
     notes_dir: &str,
     query: &str,
     index: &NoteIndex,
 ) -> io::Result<Vec<NoteMetadata>> {
     let output = std::process::Command::new("qmd")
-        .args(["search", query])
+        .env("PATH", crate::qmd::enriched_path())
+        .args(["search", query, "--json", "-n", "20"])
         .current_dir(notes_dir)
         .output()?;
 
@@ -809,16 +980,26 @@ fn search_with_qmd(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut results: Vec<NoteMetadata> = Vec::new();
 
-    for line in stdout.lines() {
-        let path = line.trim();
-        if path.is_empty() {
-            continue;
-        }
-        // Find note in index by path
-        for meta in index.notes.values() {
-            if meta.path == path || path.ends_with(&meta.path) {
-                results.push(meta.clone());
-                break;
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        if let Some(items) = val.as_array() {
+            for item in items {
+                let path = item
+                    .get("path")
+                    .or_else(|| item.get("file"))
+                    .or_else(|| item.get("filepath"))
+                    .and_then(|v| v.as_str());
+                if let Some(path) = path {
+                    if let Some(rel_path) = resolve_qmd_result_path(path, index) {
+                        if let Some(meta) = index
+                            .notes
+                            .values()
+                            .find(|meta| meta.path == rel_path)
+                            .cloned()
+                        {
+                            results.push(meta);
+                        }
+                    }
+                }
             }
         }
     }
@@ -826,8 +1007,75 @@ fn search_with_qmd(
     Ok(results)
 }
 
+fn migrate_starred_notes(notes_dir: &str) -> io::Result<()> {
+    let patterns = [
+        format!("{}/notes/**/*.md", notes_dir),
+        format!("{}/pinned/**/*.md", notes_dir),
+    ];
+
+    for pattern in &patterns {
+        if let Ok(entries) = glob::glob(pattern) {
+            for entry in entries.flatten() {
+                let raw = match fs::read_to_string(&entry) {
+                    Ok(raw) => raw,
+                    Err(_) => continue,
+                };
+                let (fm, body) = parse_frontmatter(&raw);
+                let Some(fm) = fm else { continue };
+                let Some(was_starred) = fm.starred else { continue };
+                if fm.id.is_none() {
+                    continue;
+                }
+                let id = fm.id.unwrap();
+
+                let rel_path = normalize_rel_path(entry.strip_prefix(notes_dir).unwrap_or(&entry))
+                    .trim_start_matches('/')
+                    .to_string();
+                let suffix = rel_path.strip_prefix("notes/").unwrap_or(rel_path.as_str());
+                let target_rel = if was_starred && !is_pinned_path(&rel_path) {
+                    format!("pinned/{suffix}")
+                } else {
+                    rel_path.clone()
+                };
+                let dest_path = note_abspath(notes_dir, &target_rel);
+                if dest_path.exists() && dest_path != entry {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("Pinned migration destination already exists: {target_rel}"),
+                    ));
+                }
+
+                let (raw_yaml, _) = parse_raw_yaml(&raw);
+                let title = fm.title.unwrap_or_else(|| extract_title(&body));
+                let created = fm.created.unwrap_or_default();
+                let modified = fm.modified.unwrap_or_else(|| created.clone());
+                let tags = fm.tags.unwrap_or_default();
+                let frontmatter = build_frontmatter(
+                    &id,
+                    &created,
+                    &modified,
+                    &tags,
+                    Some(&title),
+                    raw_yaml.as_ref(),
+                );
+                let full_content = format!("{frontmatter}{body}");
+
+                if dest_path != entry {
+                    move_path(&entry, &dest_path)?;
+                }
+                fs::write(dest_path, full_content)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Rebuild the full index by scanning all .md files
 pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
+    ensure_storage_layout(notes_dir)?;
+    migrate_starred_notes(notes_dir)?;
+
     let mut index = NoteIndex {
         version: 1,
         notes: HashMap::new(),
@@ -838,10 +1086,10 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
         return Ok(index);
     }
 
-    // Scan both top-level and meetings/ subdirectory.
+    // Scan both managed collections recursively.
     let patterns = [
-        format!("{}/*.md", notes_dir),
-        format!("{}/meetings/*.md", notes_dir),
+        format!("{}/notes/**/*.md", notes_dir),
+        format!("{}/pinned/**/*.md", notes_dir),
     ];
     for pattern in &patterns {
         if let Ok(entries) = glob::glob(pattern) {
@@ -852,12 +1100,11 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
                         if let Some(id) = fm.id {
                             let title = fm.title.unwrap_or_else(|| extract_title(&body));
                             // Store relative path from notes_dir.
-                            let rel_path = entry
-                                .strip_prefix(notes_dir)
-                                .unwrap_or(&entry)
-                                .to_string_lossy()
-                                .trim_start_matches('/')
-                                .to_string();
+                            let rel_path = normalize_rel_path(
+                                entry.strip_prefix(notes_dir).unwrap_or(&entry),
+                            )
+                            .trim_start_matches('/')
+                            .to_string();
                             let created = fm.created.unwrap_or_default();
                             let modified = fm.modified.unwrap_or_else(|| created.clone());
                             let meta = NoteMetadata {
@@ -867,7 +1114,6 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
                                 created,
                                 modified,
                                 tags: fm.tags.unwrap_or_default(),
-                                starred: fm.starred.unwrap_or(false),
                             };
                             index.notes.insert(id, meta);
                         }
@@ -1070,7 +1316,7 @@ pub fn import_markdown_file(
             _ => None,
         })
         .unwrap_or_default();
-    let starred = extra
+    let should_pin = extra
         .get(Value::String("starred".into()))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
@@ -1080,7 +1326,6 @@ pub fn import_markdown_file(
         &created,
         &modified,
         &tags,
-        starred,
         Some(&title),
         Some(&extra),
     );
@@ -1089,24 +1334,80 @@ pub fn import_markdown_file(
     let timestamp = now.format("%Y%m%d%H%M%S").to_string();
     let slug = slugify(&title);
     let filename = format!("{}-{}.md", timestamp, slug);
-    let file_path = Path::new(notes_dir).join(&filename);
+    let file_path = if should_pin {
+        pinned_collection_dir(notes_dir).join(&filename)
+    } else {
+        notes_collection_dir(notes_dir).join(&filename)
+    };
 
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::write(&file_path, &full_content)?;
 
     let meta = NoteMetadata {
         id: note_id.clone(),
-        path: filename,
+        path: if should_pin {
+            format!("{PINNED_COLLECTION_DIR}/{filename}")
+        } else {
+            format!("{NOTES_COLLECTION_DIR}/{filename}")
+        },
         title,
         created,
         modified,
         tags,
-        starred,
     };
 
     index.notes.insert(note_id, meta.clone());
     save_index(notes_dir, index)?;
 
     Ok(meta)
+}
+
+pub fn toggle_pin(notes_dir: &str, id: &str, index: &mut NoteIndex) -> io::Result<NoteMetadata> {
+    let meta = index
+        .notes
+        .get(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Note not found"))?
+        .clone();
+
+    let suffix = meta
+        .path
+        .strip_prefix("pinned/")
+        .or_else(|| meta.path.strip_prefix("notes/"))
+        .unwrap_or(meta.path.as_str());
+    let dest_rel = if is_pinned_path(&meta.path) {
+        format!("notes/{suffix}")
+    } else {
+        format!("pinned/{suffix}")
+    };
+
+    let src_path = note_abspath(notes_dir, &meta.path);
+    let dest_path = note_abspath(notes_dir, &dest_rel);
+
+    if !src_path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Source note file not found",
+        ));
+    }
+    if dest_path.exists() && dest_path != src_path {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Destination note file already exists",
+        ));
+    }
+
+    move_path(&src_path, &dest_path)?;
+
+    let updated = NoteMetadata {
+        path: dest_rel,
+        ..meta
+    };
+    index.notes.insert(id.to_string(), updated.clone());
+    save_index(notes_dir, index)?;
+
+    Ok(updated)
 }
 
 /// Import markdown files from notes_dir/inbox into the normal notes directory.
@@ -1444,6 +1745,136 @@ mod tests {
         let (fm, body) = parse_frontmatter(&raw);
         assert!(fm.is_some());
         assert!(body.contains("From phone"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_toggle_pin_moves_note_between_collections() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+
+        let meta = save_note(&dir, None, "# Pin me", &[], None, &mut index).unwrap();
+        let source_path = Path::new(&dir).join(&meta.path);
+        assert!(source_path.exists());
+
+        let pinned = toggle_pin(&dir, &meta.id, &mut index).unwrap();
+        assert!(pinned.path.starts_with("pinned/"));
+        assert!(!source_path.exists());
+        assert!(Path::new(&dir).join(&pinned.path).exists());
+
+        let unpinned = toggle_pin(&dir, &meta.id, &mut index).unwrap();
+        assert!(unpinned.path.starts_with("notes/"));
+        assert!(Path::new(&dir).join(&unpinned.path).exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_recent_and_pinned_lists_are_separated() {
+        let dir = setup_test_dir();
+        let mut index = NoteIndex::default();
+
+        let recent = save_note(&dir, None, "# Recent", &[], None, &mut index).unwrap();
+        let pinned = save_note(&dir, None, "# Pinned", &[], None, &mut index).unwrap();
+        toggle_pin(&dir, &pinned.id, &mut index).unwrap();
+
+        let recent_notes = list_recent_notes(&index, 10, "created");
+        let pinned_notes = list_pinned_notes(&index, "created");
+
+        assert!(recent_notes.iter().all(|note| !is_pinned_path(&note.path)));
+        assert_eq!(recent_notes.len(), 1);
+        assert_eq!(recent_notes[0].id, recent.id);
+
+        assert_eq!(pinned_notes.len(), 1);
+        assert!(is_pinned_path(&pinned_notes[0].path));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_storage_layout_moves_legacy_flat_notes() {
+        let dir = setup_test_dir();
+        let legacy_path = Path::new(&dir).join("legacy.md");
+        fs::write(
+            &legacy_path,
+            "---\nid: legacy-1\ncreated: 2026-01-01T00:00:00+00:00\nmodified: 2026-01-01T00:00:00+00:00\n---\n# Legacy\n",
+        )
+        .unwrap();
+
+        ensure_storage_layout(&dir).unwrap();
+
+        assert!(!legacy_path.exists());
+        assert!(Path::new(&dir).join("notes/legacy.md").exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_rebuild_index_migrates_starred_note_to_pinned() {
+        let dir = setup_test_dir();
+        let notes_dir = Path::new(&dir).join("notes");
+        fs::create_dir_all(&notes_dir).unwrap();
+        let legacy_starred = notes_dir.join("starred.md");
+        fs::write(
+            &legacy_starred,
+            "---\nid: starred-1\ncreated: 2026-01-01T00:00:00+00:00\nmodified: 2026-01-01T00:00:00+00:00\nstarred: true\n---\n# Starred note\n",
+        )
+        .unwrap();
+
+        let index = rebuild_index(&dir).unwrap();
+        let meta = index.notes.get("starred-1").unwrap();
+        assert_eq!(meta.path, "pinned/starred.md");
+        assert!(!legacy_starred.exists());
+
+        let migrated = fs::read_to_string(Path::new(&dir).join(&meta.path)).unwrap();
+        assert!(!migrated.contains("starred: true"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_storage_layout_handles_flat_note_name_collision() {
+        let dir = setup_test_dir();
+        let notes_dir = Path::new(&dir).join("notes");
+        fs::create_dir_all(&notes_dir).unwrap();
+
+        let existing = notes_dir.join("same.md");
+        fs::write(&existing, "# Existing").unwrap();
+        let legacy = Path::new(&dir).join("same.md");
+        fs::write(&legacy, "# Legacy").unwrap();
+
+        ensure_storage_layout(&dir).unwrap();
+
+        assert!(!legacy.exists());
+        assert!(existing.exists());
+        let migrated = notes_dir.join("same-migrated-1.md");
+        assert!(migrated.exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_storage_layout_handles_meeting_name_collision() {
+        let dir = setup_test_dir();
+        let target_meetings = Path::new(&dir).join("notes/meetings");
+        fs::create_dir_all(&target_meetings).unwrap();
+
+        let existing = target_meetings.join("meeting.md");
+        fs::write(&existing, "# Existing Meeting").unwrap();
+
+        let legacy_meetings = Path::new(&dir).join("meetings");
+        fs::create_dir_all(&legacy_meetings).unwrap();
+        let legacy = legacy_meetings.join("meeting.md");
+        fs::write(&legacy, "# Legacy Meeting").unwrap();
+
+        ensure_storage_layout(&dir).unwrap();
+
+        assert!(!legacy.exists());
+        assert!(!legacy_meetings.exists());
+        assert!(existing.exists());
+        let migrated = target_meetings.join("meeting-migrated-1.md");
+        assert!(migrated.exists());
 
         fs::remove_dir_all(&dir).ok();
     }

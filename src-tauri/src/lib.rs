@@ -181,7 +181,7 @@ fn set_notes_dir(
     app_handle: tauri::AppHandle,
     path: String,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    notes::ensure_storage_layout(&path).map_err(|e| e.to_string())?;
 
     // Flush and shut down the old git worker.
     let old_git = {
@@ -318,6 +318,18 @@ fn list_recent_notes(
 }
 
 #[tauri::command]
+fn list_pinned_notes(
+    state: State<AppState>,
+    sort_by: Option<String>,
+) -> Result<Vec<NoteMetadata>, String> {
+    let index = state.index.lock().map_err(|e| e.to_string())?;
+    Ok(notes::list_pinned_notes(
+        &index,
+        sort_by.as_deref().unwrap_or("created"),
+    ))
+}
+
+#[tauri::command]
 fn search_notes(state: State<AppState>, query: String) -> Result<Vec<NoteMetadata>, String> {
     let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
     let index = state.index.lock().map_err(|e| e.to_string())?;
@@ -339,14 +351,18 @@ fn get_all_tags(state: State<AppState>) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn toggle_star(state: State<AppState>, id: String) -> Result<NoteMetadata, String> {
+fn toggle_pin(state: State<AppState>, id: String) -> Result<NoteMetadata, String> {
     let meta = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         let mut index = state.index.lock().map_err(|e| e.to_string())?;
-        notes::toggle_star(&dir, &id, &mut index).map_err(|e| e.to_string())?
+        notes::toggle_pin(&dir, &id, &mut index).map_err(|e| e.to_string())?
     };
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.notify_change(&meta.path, &meta.title, false);
+    drop(git);
+    if let Ok(qmd) = state.qmd.lock() {
+        qmd.notify_change(&meta.id, &meta.title);
+    }
     Ok(meta)
 }
 
@@ -432,10 +448,7 @@ async fn retranscribe_note(state: State<'_, AppState>, id: String) -> Result<Not
     let (notes_dir, audio_path, whisper_model) = {
         let dir = state.notes_dir.lock().map_err(|e| e.to_string())?;
         let ms = state.model_settings.lock().map_err(|e| e.to_string())?;
-        let audio_path = std::path::Path::new(&*dir)
-            .join("meetings")
-            .join(".audio")
-            .join(format!("{id}.wav"));
+        let audio_path = notes::meeting_audio_dir(&dir).join(format!("{id}.wav"));
         (dir.clone(), audio_path, ms.whisper_model.clone())
     };
 
@@ -737,8 +750,8 @@ async fn pull_ollama_model(app_handle: tauri::AppHandle, name: String) -> Result
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let home = dirs_home();
-    let default_dir = format!("{}/notes", home);
-    let _ = std::fs::create_dir_all(&default_dir);
+    let default_dir = format!("{}/dump", home);
+    let _ = notes::ensure_storage_layout(&default_dir);
 
     let index = notes::rebuild_index(&default_dir).unwrap_or_default();
 
@@ -772,10 +785,11 @@ pub fn run() {
             delete_note,
             get_note,
             list_recent_notes,
+            list_pinned_notes,
             search_notes,
             rebuild_index,
             get_all_tags,
-            toggle_star,
+            toggle_pin,
             import_markdown_file,
             git_sync::get_git_remote,
             git_sync::set_git_remote,

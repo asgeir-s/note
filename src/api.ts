@@ -7,17 +7,20 @@ export interface NoteMetadata {
   created: string;
   modified: string;
   tags: string[];
-  starred: boolean;
 }
 
 export interface NoteContent {
   id: string;
+  path: string;
   title: string;
   content: string;
   tags: string[];
   created: string;
   modified: string;
-  starred: boolean;
+}
+
+export function isPinnedNotePath(path: string): boolean {
+  return path === "pinned" || path.startsWith("pinned/");
 }
 
 /** Check if we're running inside Tauri */
@@ -64,12 +67,11 @@ export async function saveNote(
   const existing = memoryNotes.get(noteId);
   const meta: NoteMetadata = {
     id: noteId,
-    path: `${noteId}.md`,
+    path: existing?.meta.path ?? `notes/${noteId}.md`,
     title: resolvedTitle,
     created: existing?.meta.created ?? now,
     modified: now,
     tags,
-    starred: existing?.meta.starred ?? false,
   };
   memoryNotes.set(noteId, { meta, content });
   return meta;
@@ -90,12 +92,12 @@ export async function getNote(id: string): Promise<NoteContent> {
   if (!note) throw new Error("Note not found");
   return {
     id,
+    path: note.meta.path,
     title: note.meta.title,
     content: note.content,
     tags: note.meta.tags,
     created: note.meta.created,
     modified: note.meta.modified,
-    starred: note.meta.starred,
   };
 }
 
@@ -110,14 +112,29 @@ export async function listRecentNotes(
   }
   const notes = Array.from(memoryNotes.values())
     .map((n) => n.meta)
+    .filter((note) => !isPinnedNotePath(note.path))
     .sort((a, b) => {
-      // Starred notes first
-      if (a.starred !== b.starred) return a.starred ? -1 : 1;
       return sortBy === "modified"
         ? b.modified.localeCompare(a.modified)
         : b.created.localeCompare(a.created);
     });
   return notes.slice(0, limit);
+}
+
+export async function listPinnedNotes(
+  sortBy: SortBy = "created",
+): Promise<NoteMetadata[]> {
+  if (isTauri()) {
+    return invoke<NoteMetadata[]>("list_pinned_notes", { sortBy });
+  }
+  return Array.from(memoryNotes.values())
+    .map((n) => n.meta)
+    .filter((note) => isPinnedNotePath(note.path))
+    .sort((a, b) => {
+      return sortBy === "modified"
+        ? b.modified.localeCompare(a.modified)
+        : b.created.localeCompare(a.created);
+    });
 }
 
 /** Fuzzy-match query against target by walking query chars in order.
@@ -181,7 +198,9 @@ export async function searchNotes(query: string): Promise<NoteMetadata[]> {
     }
   }
 
-  return merged.slice(0, 20);
+  const pinned = merged.filter((note) => isPinnedNotePath(note.path));
+  const regular = merged.filter((note) => !isPinnedNotePath(note.path));
+  return [...pinned, ...regular].slice(0, 20);
 }
 
 export async function getAllTags(): Promise<string[]> {
@@ -197,13 +216,18 @@ export async function getAllTags(): Promise<string[]> {
   return Array.from(tags).sort();
 }
 
-export async function toggleStar(id: string): Promise<NoteMetadata> {
+export async function togglePin(id: string): Promise<NoteMetadata> {
   if (isTauri()) {
-    return invoke<NoteMetadata>("toggle_star", { id });
+    return invoke<NoteMetadata>("toggle_pin", { id });
   }
   const note = memoryNotes.get(id);
   if (!note) throw new Error("Note not found");
-  note.meta.starred = !note.meta.starred;
+  const suffix = note.meta.path
+    .replace(/^pinned\//, "")
+    .replace(/^notes\//, "");
+  note.meta.path = isPinnedNotePath(note.meta.path)
+    ? `notes/${suffix}`
+    : `pinned/${suffix}`;
   return note.meta;
 }
 

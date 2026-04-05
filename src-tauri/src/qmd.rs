@@ -136,18 +136,12 @@ fn save_pending(path: &Path, pending: &HashMap<String, String>) {
 pub(crate) fn enriched_path() -> String {
     let base = std::env::var("PATH").unwrap_or_default();
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
-    let mut extra: Vec<String> = vec![
-        "/opt/homebrew/bin".into(),
-        "/usr/local/bin".into(),
-        format!("{home}/.local/bin"),
-        format!("{home}/.volta/bin"),
-        "/usr/bin".into(),
-        "/bin".into(),
-    ];
-    // nvm: find the active node version directory
+    let mut preferred: Vec<String> = Vec::new();
+
+    // nvm: prefer the newest installed Node bin so npm-installed CLIs resolve
+    // against the matching runtime instead of an older Homebrew/global Node.
     let nvm_dir = format!("{home}/.nvm/versions/node");
     if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
-        // Pick the most recently modified node version
         let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
         for entry in entries.flatten() {
             let bin = entry.path().join("bin");
@@ -161,15 +155,29 @@ pub(crate) fn enriched_path() -> String {
             }
         }
         if let Some((_, bin)) = best {
-            // Keep nvm as a fallback; prefer system-managed locations first for
-            // bundled app runtime consistency.
-            extra.push(bin.to_string_lossy().to_string());
+            preferred.push(bin.to_string_lossy().to_string());
         }
     }
-    let mut parts: Vec<&str> = base.split(':').collect();
-    for p in &extra {
-        if !parts.contains(&p.as_str()) {
+
+    preferred.extend([
+        format!("{home}/.volta/bin"),
+        format!("{home}/.local/bin"),
+        "/opt/homebrew/bin".into(),
+        "/opt/homebrew/sbin".into(),
+        "/usr/local/bin".into(),
+        "/usr/bin".into(),
+        "/bin".into(),
+    ]);
+
+    let mut parts: Vec<String> = Vec::new();
+    for p in preferred {
+        if !p.is_empty() && !parts.iter().any(|existing| existing == &p) {
             parts.push(p);
+        }
+    }
+    for p in base.split(':') {
+        if !p.is_empty() && !parts.iter().any(|existing| existing == p) {
+            parts.push(p.to_string());
         }
     }
     parts.join(":")
@@ -219,6 +227,78 @@ async fn qmd(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+fn parse_collection_show(output: &str) -> (Option<String>, Option<String>) {
+    let mut path = None;
+    let mut pattern = None;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("Path:") {
+            path = Some(value.trim().to_string());
+        } else if let Some(value) = trimmed.strip_prefix("Pattern:") {
+            pattern = Some(value.trim().to_string());
+        }
+    }
+    (path, pattern)
+}
+
+async fn ensure_collection(dir: &Path, name: &str, target_path: &Path) -> Result<(), String> {
+    let target = target_path.to_string_lossy().to_string();
+
+    let needs_recreate = match qmd(dir, &["collection", "show", name]).await {
+        Ok(output) => {
+            let (path, pattern) = parse_collection_show(&output);
+            path.as_deref() != Some(target.as_str()) || pattern.as_deref() == Some("*.md")
+        }
+        Err(_) => false,
+    };
+
+    if needs_recreate {
+        let _ = qmd(dir, &["collection", "remove", name]).await;
+    }
+
+    if qmd(dir, &["collection", "show", name]).await.is_err() {
+        qmd(dir, &["collection", "add", &target, "--name", name]).await?;
+    }
+
+    Ok(())
+}
+
+async fn ensure_context(dir: &Path, target: &str, text: &str) -> Result<(), String> {
+    let _ = qmd(dir, &["context", "rm", target]).await;
+    qmd(dir, &["context", "add", target, text]).await?;
+    Ok(())
+}
+
+async fn ensure_qmd_setup(dir: &Path) -> Result<(), String> {
+    ensure_collection(
+        dir,
+        "notes",
+        &dir.join(crate::notes::NOTES_COLLECTION_DIR),
+    )
+    .await?;
+    ensure_collection(
+        dir,
+        "pinned",
+        &dir.join(crate::notes::PINNED_COLLECTION_DIR),
+    )
+    .await?;
+
+    ensure_context(
+        dir,
+        "qmd://notes",
+        "Stream of personal notes including journal entries, meeting notes, drafts, ideas, and brain dumps. These are temporal records that capture a moment. They provide context and history but are not authoritative.",
+    )
+    .await?;
+    ensure_context(
+        dir,
+        "qmd://pinned",
+        "Pinned notes. These represent the user's deliberate, current positions on topics like values, goals, routines, and business strategy. When a query matches both a pinned note and a regular note, the pinned note is the authoritative source.",
+    )
+    .await?;
+
+    Ok(())
+}
+
 /// Strip ANSI escape sequences from qmd output (spinner, colors, cursor movement).
 fn strip_ansi(s: &str) -> String {
     let re = regex::Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07").unwrap();
@@ -240,23 +320,8 @@ async fn run_worker(
         return;
     }
 
-    // Initialize qmd collection.
-    let dir_str = dir.to_string_lossy().to_string();
-    if let Err(e) = qmd(
-        &dir,
-        &[
-            "collection",
-            "add",
-            &dir_str,
-            "--name",
-            "notes",
-            "--mask",
-            "*.md",
-        ],
-    )
-    .await
-    {
-        eprintln!("qmd: collection add failed (may already exist): {e}");
+    if let Err(e) = ensure_qmd_setup(&dir).await {
+        eprintln!("qmd: setup failed: {e}");
     }
     if let Err(e) = qmd(&dir, &["update"]).await {
         eprintln!("qmd: initial update failed: {e}");

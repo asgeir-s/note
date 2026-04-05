@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { listInputDevices } from "./api";
-import type { ToolStatus, InputDeviceInfo, ModelSettings, OllamaModelInfo, WhisperModelInfo, InstallToolKey } from "./api";
+import type {
+  ToolStatus,
+  InputDeviceInfo,
+  ModelSettings,
+  OllamaModelInfo,
+  WhisperModelInfo,
+  InstallToolKey,
+} from "./api";
 
 export interface PullProgress {
   model: string;
@@ -10,6 +17,8 @@ export interface PullProgress {
 
 interface SettingsPanelProps {
   toolStatus: ToolStatus;
+  notesDirPath: string | null;
+  gitRemoteUrl: string | null;
   recordingDevice: string | null;
   onDeviceChange: (device: string | null) => void;
   onRefreshTools: () => void;
@@ -24,18 +33,39 @@ interface SettingsPanelProps {
 }
 
 const TOOLS = [
-  { key: "git" as InstallToolKey, label: "git", description: "Version control & sync" },
-  { key: "ffmpeg" as InstallToolKey, label: "ffmpeg", description: "Audio processing" },
-  { key: "whisper" as InstallToolKey, label: "whisper-cli", description: "Speech transcription" },
-  { key: "ollama" as InstallToolKey, label: "ollama", description: "AI tagging & summaries" },
-  { key: "qmd" as InstallToolKey, label: "qmd", description: "Related notes search" },
+  {
+    key: "git" as InstallToolKey,
+    label: "git",
+    description: "Version control & sync",
+  },
+  {
+    key: "ffmpeg" as InstallToolKey,
+    label: "ffmpeg",
+    description: "Audio processing",
+  },
+  {
+    key: "whisper" as InstallToolKey,
+    label: "whisper-cli",
+    description: "Speech transcription",
+  },
+  {
+    key: "ollama" as InstallToolKey,
+    label: "ollama",
+    description: "AI tagging & summaries",
+  },
+  {
+    key: "qmd" as InstallToolKey,
+    label: "qmd",
+    description: "Related notes search",
+  },
 ];
 type ToolKey = InstallToolKey;
 
 function getInstallCommand(tool: ToolKey): string {
-  const platform = typeof navigator !== "undefined"
-    ? (navigator.platform || navigator.userAgent || "").toLowerCase()
-    : "";
+  const platform =
+    typeof navigator !== "undefined"
+      ? (navigator.platform || navigator.userAgent || "").toLowerCase()
+      : "";
   const isMac = platform.includes("mac");
   const isLinux = platform.includes("linux");
 
@@ -62,6 +92,8 @@ function formatSize(bytes: number | null): string {
 
 export function SettingsPanel({
   toolStatus,
+  notesDirPath,
+  gitRemoteUrl,
   recordingDevice,
   onDeviceChange,
   onRefreshTools,
@@ -79,7 +111,9 @@ export function SettingsPanel({
   const [installingTool, setInstallingTool] = useState<ToolKey | null>(null);
 
   useEffect(() => {
-    listInputDevices().then(setDevices).catch(() => setDevices([]));
+    listInputDevices()
+      .then(setDevices)
+      .catch(() => setDevices([]));
   }, []);
 
   // Escape and click-outside to close
@@ -104,10 +138,11 @@ export function SettingsPanel({
   );
 
   const handleOllamaModelChange = useCallback(
-    (field: "keyword_model" | "summary_model") => (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const value = e.target.value || null;
-      onModelSettingsChange({ ...modelSettings, [field]: value });
-    },
+    (field: "keyword_model" | "summary_model") =>
+      (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const value = e.target.value || null;
+        onModelSettingsChange({ ...modelSettings, [field]: value });
+      },
     [modelSettings, onModelSettingsChange],
   );
 
@@ -119,30 +154,54 @@ export function SettingsPanel({
     [modelSettings, onModelSettingsChange],
   );
 
-  const handlePullModel = useCallback(async (name: string) => {
-    setPullingModel(name);
-    try {
-      await onPullModel(name);
-    } finally {
-      setPullingModel(null);
-    }
-  }, [onPullModel]);
+  const handlePullModel = useCallback(
+    async (name: string) => {
+      setPullingModel(name);
+      try {
+        await onPullModel(name);
+      } finally {
+        setPullingModel(null);
+      }
+    },
+    [onPullModel],
+  );
 
-  const handleInstallTool = useCallback(async (tool: ToolKey) => {
-    setInstallingTool(tool);
-    try {
-      await onInstallTool(tool);
-    } finally {
-      setInstallingTool(null);
-    }
-  }, [onInstallTool]);
+  const handleInstallTool = useCallback(
+    async (tool: ToolKey) => {
+      setInstallingTool(tool);
+      try {
+        await onInstallTool(tool);
+      } finally {
+        setInstallingTool(null);
+      }
+    },
+    [onInstallTool],
+  );
 
-  const installedOllama = ollamaModels.filter(m => m.installed);
-  const uninstalledOllama = ollamaModels.filter(m => !m.installed);
+  const installedOllama = ollamaModels.filter((m) => m.installed);
+  const uninstalledOllama = ollamaModels.filter((m) => !m.installed);
 
   return (
     <div className="settings-overlay" onMouseDown={onClose}>
       <div className="settings-panel" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="settings-section">
+          <div className="settings-section-title">Storage & Sync</div>
+
+          <div className="settings-info-block">
+            <div className="settings-info-label">Notes folder on disk</div>
+            <div className="settings-info-value">
+              {notesDirPath ?? "Not available"}
+            </div>
+          </div>
+
+          <div className="settings-info-block">
+            <div className="settings-info-label">Git remote</div>
+            <div className="settings-info-value">
+              {gitRemoteUrl ?? "Not connected"}
+            </div>
+          </div>
+        </div>
+
         <div className="settings-section">
           <div className="settings-section-title">Recording Device</div>
           <select
@@ -153,7 +212,8 @@ export function SettingsPanel({
             <option value="">Auto-detect</option>
             {devices.map((d) => (
               <option key={d.name} value={d.name}>
-                {d.name}{d.is_default ? " (default)" : ""}
+                {d.name}
+                {d.is_default ? " (default)" : ""}
               </option>
             ))}
           </select>
@@ -162,7 +222,9 @@ export function SettingsPanel({
         <div className="settings-section">
           <div className="settings-section-title">Models</div>
 
-          <label className="settings-model-label">Keywords model (ollama)</label>
+          <label className="settings-model-label">
+            Keywords model (ollama)
+          </label>
           <select
             className="settings-device-select"
             value={modelSettings.keyword_model ?? ""}
@@ -171,7 +233,8 @@ export function SettingsPanel({
             <option value="">Auto-detect</option>
             {installedOllama.map((m) => (
               <option key={m.name} value={m.name}>
-                {m.name}{m.size_bytes ? ` (${formatSize(m.size_bytes)})` : ""}
+                {m.name}
+                {m.size_bytes ? ` (${formatSize(m.size_bytes)})` : ""}
               </option>
             ))}
           </select>
@@ -185,12 +248,15 @@ export function SettingsPanel({
             <option value="">Auto-detect</option>
             {installedOllama.map((m) => (
               <option key={m.name} value={m.name}>
-                {m.name}{m.size_bytes ? ` (${formatSize(m.size_bytes)})` : ""}
+                {m.name}
+                {m.size_bytes ? ` (${formatSize(m.size_bytes)})` : ""}
               </option>
             ))}
           </select>
 
-          <label className="settings-model-label">Transcription model (whisper)</label>
+          <label className="settings-model-label">
+            Transcription model (whisper)
+          </label>
           <select
             className="settings-device-select"
             value={modelSettings.whisper_model ?? ""}
@@ -206,12 +272,15 @@ export function SettingsPanel({
 
           {uninstalledOllama.length > 0 && (
             <div className="settings-model-recommended">
-              <div className="settings-model-recommended-title">Recommended ollama models</div>
+              <div className="settings-model-recommended-title">
+                Recommended ollama models
+              </div>
               {uninstalledOllama.map((m) => (
                 <div key={m.name} className="settings-model-row">
                   <span className="settings-model-name">{m.name}</span>
                   <span className="settings-model-size">
-                    {m.parameter_size ?? ""}{m.size_bytes ? ` · ${formatSize(m.size_bytes)}` : ""}
+                    {m.parameter_size ?? ""}
+                    {m.size_bytes ? ` · ${formatSize(m.size_bytes)}` : ""}
                   </span>
                   {pullingModel === m.name && pullProgress?.model === m.name ? (
                     <div className="settings-model-progress">
@@ -257,7 +326,9 @@ export function SettingsPanel({
                 <div className="settings-tool-row">
                   <div className="settings-tool-info">
                     <span className="settings-tool-name">{tool.label}</span>
-                    <span className="settings-tool-desc">{tool.description}</span>
+                    <span className="settings-tool-desc">
+                      {tool.description}
+                    </span>
                   </div>
                   <button
                     className="settings-model-install-btn"
@@ -267,7 +338,9 @@ export function SettingsPanel({
                     {installingTool === tool.key ? "Opening..." : "Install"}
                   </button>
                 </div>
-                <code className="settings-install-cmd">{getInstallCommand(tool.key)}</code>
+                <code className="settings-install-cmd">
+                  {getInstallCommand(tool.key)}
+                </code>
               </div>
             ))}
           </div>

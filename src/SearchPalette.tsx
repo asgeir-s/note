@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { searchNotes } from "./api";
+import { isPinnedNotePath, searchNotes } from "./api";
 import type { NoteMetadata } from "./api";
 
 interface SearchPaletteProps {
@@ -128,10 +128,16 @@ export function SearchPalette({
                 }}
                 onMouseEnter={() => setActiveIndex(i)}
               >
+                {isPinnedNotePath(note.path) && (
+                  <span className="note-item-pin">📌</span>
+                )}
                 {note.tags.includes("meeting") && (
                   <span className="note-item-meeting">⏺</span>
                 )}
                 <span className="search-palette-title">{note.title}</span>
+                <span className="search-palette-kind">
+                  {isPinnedNotePath(note.path) ? "Pinned" : "Note"}
+                </span>
               </button>
             ))}
           </div>

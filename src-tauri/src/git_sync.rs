@@ -202,9 +202,7 @@ async fn commit_pending_changes(dir: &Path, pending: &mut Vec<FileChange>) -> Re
         }
     }
 
-    // Also stage the index and related-cache files.
-    let _ = git(dir, &["add", ".dump-index.json"]).await;
-    let _ = git(dir, &["add", ".dump-related.json"]).await;
+    stage_managed_paths(dir).await;
 
     // Check if there's actually anything staged.
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
@@ -679,6 +677,50 @@ fn emit_notes_changed(app_handle: &tauri::AppHandle) {
     let _ = app_handle.emit("notes-changed", ());
 }
 
+async fn stage_managed_paths(dir: &Path) {
+    let _ = git(dir, &["add", "-A", "notes"]).await;
+    let _ = git(dir, &["add", "-A", "pinned"]).await;
+    let _ = git(dir, &["add", "-A", "inbox"]).await;
+    let _ = git(dir, &["add", ".dump-index.json"]).await;
+    let _ = git(dir, &["add", ".dump-related.json"]).await;
+}
+
+fn ensure_gitignore_rules(dir: &Path) -> Result<bool, String> {
+    const REQUIRED_LINES: &[&str] = &[
+        ".dump-index.json",
+        ".DS_Store",
+        "*.swp",
+        "*.tmp",
+        "notes/meetings/.audio/",
+    ];
+
+    let gitignore = dir.join(".gitignore");
+    let existing = if gitignore.exists() {
+        std::fs::read_to_string(&gitignore).map_err(|e| format!("read .gitignore: {e}"))?
+    } else {
+        String::new()
+    };
+
+    let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
+    let mut changed = !gitignore.exists();
+    for required in REQUIRED_LINES {
+        if !lines.iter().any(|line| line.trim() == *required) {
+            lines.push((*required).to_string());
+            changed = true;
+        }
+    }
+
+    if changed {
+        let mut content = lines.join("\n");
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        std::fs::write(&gitignore, content).map_err(|e| format!("write .gitignore: {e}"))?;
+    }
+
+    Ok(changed)
+}
+
 /// Ensure the notes directory is a git repo. If not, init one.
 async fn ensure_git_repo(dir: &Path) -> Result<(), String> {
     // Check if git is available.
@@ -688,28 +730,24 @@ async fn ensure_git_repo(dir: &Path) -> Result<(), String> {
 
     let check = git(dir, &["rev-parse", "--is-inside-work-tree"]).await;
     if check.is_ok() {
+        if ensure_gitignore_rules(dir)? {
+            let _ = git(dir, &["add", ".gitignore"]).await;
+        }
         return Ok(());
     }
 
     // Not a repo — initialise.
     git(dir, &["init"]).await?;
 
-    // Write .gitignore.
-    let gitignore = dir.join(".gitignore");
-    if !gitignore.exists() {
-        std::fs::write(
-            &gitignore,
-            ".dump-index.json\n.DS_Store\n*.swp\n*.tmp\nmeetings/.audio/\n",
-        )
-        .map_err(|e| format!("write .gitignore: {e}"))?;
-    }
+    // Write/upgrade .gitignore.
+    let _ = ensure_gitignore_rules(dir)?;
 
     ensure_inbox_keep_file(dir)?;
 
-    // Stage .gitignore and any existing .md files.
+    // Stage .gitignore and managed note directories.
     let _ = git(dir, &["add", ".gitignore"]).await;
     let _ = git(dir, &["add", "inbox/.gitkeep"]).await;
-    let _ = git(dir, &["add", "*.md"]).await;
+    stage_managed_paths(dir).await;
 
     // Initial commit (only if there's something staged).
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
@@ -724,10 +762,9 @@ async fn ensure_git_repo(dir: &Path) -> Result<(), String> {
 async fn commit_leftover_md(dir: &Path) -> Result<(), String> {
     ensure_inbox_keep_file(dir)?;
 
-    // Stage all .md files — `git add` is a no-op for unchanged files.
-    let _ = git(dir, &["add", "*.md"]).await;
+    // Stage managed paths — `git add` is a no-op for unchanged files.
     let _ = git(dir, &["add", "inbox/.gitkeep"]).await;
-    let _ = git(dir, &["add", ".dump-index.json"]).await;
+    stage_managed_paths(dir).await;
 
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
     if diff.is_err() {
@@ -757,11 +794,7 @@ fn ensure_inbox_keep_file(dir: &Path) -> Result<(), String> {
 async fn commit_leftover_sync_files(dir: &Path) -> Result<(), String> {
     // Stage notes and sync artifacts that the app may update outside the normal
     // save flow (for example index/cache rebuilds).
-    let _ = git(dir, &["add", "*.md"]).await;
-    let _ = git(dir, &["add", "meetings/*.md"]).await;
-    let _ = git(dir, &["add", "-A", "inbox"]).await;
-    let _ = git(dir, &["add", ".dump-index.json"]).await;
-    let _ = git(dir, &["add", ".dump-related.json"]).await;
+    stage_managed_paths(dir).await;
 
     let diff = git(dir, &["diff", "--cached", "--quiet"]).await;
     if diff.is_err() {
@@ -950,4 +983,46 @@ pub fn dismiss_git_setup(state: State<AppState>) -> Result<(), String> {
     let git = state.git.lock().map_err(|e| e.to_string())?;
     git.dismiss();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_temp_dir() -> PathBuf {
+        let path = std::env::temp_dir().join(format!("dump_git_sync_test_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_ensure_gitignore_rules_appends_new_audio_ignore() {
+        let dir = make_temp_dir();
+        let gitignore = dir.join(".gitignore");
+        std::fs::write(&gitignore, ".dump-index.json\n.DS_Store\n*.swp\n*.tmp\n").unwrap();
+
+        let changed = ensure_gitignore_rules(&dir).unwrap();
+        assert!(changed);
+
+        let content = std::fs::read_to_string(&gitignore).unwrap();
+        assert!(content.contains("notes/meetings/.audio/\n"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_gitignore_rules_is_idempotent() {
+        let dir = make_temp_dir();
+
+        let changed_once = ensure_gitignore_rules(&dir).unwrap();
+        let changed_twice = ensure_gitignore_rules(&dir).unwrap();
+        assert!(changed_once);
+        assert!(!changed_twice);
+
+        let content = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(content.contains(".dump-index.json\n"));
+        assert!(content.contains("notes/meetings/.audio/\n"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

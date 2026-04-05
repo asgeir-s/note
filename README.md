@@ -1,10 +1,10 @@
 # Dump
 
-A zero-friction personal note capture app. No folders. No organization overhead. Just write.
+A zero-friction personal note capture app. Keep notes lightweight, searchable, and easy to revisit.
 
 ## Philosophy
 
-Capture first, organize never. Notes live as flat markdown files. Structure emerges from tags, links and full-text search.
+Capture first, organize lightly. Most documents are notes; a small set can be promoted into pinned notes. Structure emerges from tags, links, full-text search, and a minimal `notes/` vs `pinned/` split.
 
 ## Tech Stack
 
@@ -88,7 +88,13 @@ tags: [strategy, fundraising]
 Content goes here. Link to [[note:e5f6a7b8-1234-5678-90ab-cdef12345678]] another note.
 ```
 
-Notes are stored as flat files in `~/dump/` (configurable).
+Dump stores documents under a configurable root:
+
+```text
+~/dump/
+  notes/
+  pinned/
+```
 
 ## Keyboard Shortcuts
 
@@ -97,6 +103,7 @@ Notes are stored as flat files in `~/dump/` (configurable).
 | `Cmd/Ctrl+Enter` | Save note                       |
 | `Escape`         | Clear textarea, discard content |
 | `Cmd/Ctrl+T`     | Toggle tag input                |
+| `Cmd/Ctrl+Shift+P` | Toggle pin state             |
 | `Cmd/Ctrl+Click` | Open note in new panel          |
 | `Cmd/Ctrl+Shift+R` | Toggle meeting recording      |
 | `Ctrl+Cmd++`     | Show shortcut list              |
@@ -112,7 +119,7 @@ Record meetings directly in the app, then get an auto-generated note with a summ
    - **ollama** summarizes the transcript into key points
 3. A meeting note appears with a Summary/Transcript toggle view
 
-Meeting notes live in `meetings/` inside your notes folder. Audio files are in `meetings/.audio/` (git-ignored).
+Meeting notes live in `notes/meetings/`. Audio files are in `notes/meetings/.audio/` (git-ignored).
 
 **Required:** `ffmpeg`, `whisper-cpp` (install via setup script)
 **Optional:** `ollama` with a model (for AI summaries — without it you still get the transcript)

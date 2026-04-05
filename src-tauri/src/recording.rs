@@ -70,9 +70,7 @@ pub struct RecordingJob {
 
 impl RecordingJob {
     fn job_path(notes_dir: &str, note_id: &str) -> PathBuf {
-        PathBuf::from(notes_dir)
-            .join("meetings/.audio")
-            .join(format!("{note_id}.job.json"))
+        crate::notes::meeting_audio_dir(notes_dir).join(format!("{note_id}.job.json"))
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -90,8 +88,8 @@ impl RecordingJob {
     }
 
     pub fn scan(notes_dir: &str) -> Vec<RecordingJob> {
-        let pattern = PathBuf::from(notes_dir)
-            .join("meetings/.audio/*.job.json")
+        let pattern = crate::notes::meeting_audio_dir(notes_dir)
+            .join("*.job.json")
             .to_string_lossy()
             .to_string();
         let mut jobs = Vec::new();
@@ -238,7 +236,7 @@ async fn run_worker(
                 summary_model,
                 whisper_model,
             }) => {
-                let audio_dir = PathBuf::from(&notes_dir).join("meetings/.audio");
+                let audio_dir = crate::notes::meeting_audio_dir(&notes_dir);
                 if let Err(e) = std::fs::create_dir_all(&audio_dir) {
                     eprintln!("recording: failed to create audio dir: {e}");
                     let _ = app_handle.emit(
@@ -902,7 +900,7 @@ async fn process_recording(
                         &job.notes_dir,
                         &job.note_id,
                         &format!(
-                            "Transcription failed. Audio saved at `meetings/.audio/{}.wav`.",
+                            "Transcription failed. Audio saved at `notes/meetings/.audio/{}.wav`.",
                             job.note_id
                         ),
                     )
@@ -1467,7 +1465,7 @@ async fn create_meeting_note(
     let created = now.to_rfc3339();
 
     let frontmatter = format!(
-        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\nstarred: false\ntype: meeting\naudio_path: meetings/.audio/{note_id}.wav\n---\n"
+        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\naudio_path: notes/meetings/.audio/{note_id}.wav\n---\n"
     );
 
     let body = format!(
@@ -1476,13 +1474,13 @@ async fn create_meeting_note(
 
     let full_content = format!("{frontmatter}{body}");
 
-    // Ensure meetings/ directory exists.
-    let meetings_dir = PathBuf::from(notes_dir).join("meetings");
+    // Ensure notes/meetings/ directory exists.
+    let meetings_dir = crate::notes::meetings_dir(notes_dir);
     let _ = std::fs::create_dir_all(&meetings_dir);
 
     let filename = format!("{timestamp}-meeting.md");
     let file_path = meetings_dir.join(&filename);
-    let rel_path = format!("meetings/{filename}");
+    let rel_path = format!("notes/meetings/{filename}");
 
     if let Err(e) = std::fs::write(&file_path, &full_content) {
         eprintln!("recording: failed to write meeting note: {e}");
@@ -1502,7 +1500,6 @@ async fn create_meeting_note(
             created: created.clone(),
             modified: created,
             tags: vec!["meeting".to_string()],
-            starred: false,
         };
 
         if let Ok(mut index) = state.index.lock() {
@@ -1572,7 +1569,7 @@ async fn create_error_note(
     let created = now.to_rfc3339();
 
     let frontmatter = format!(
-        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\nstarred: false\ntype: meeting\n---\n"
+        "---\nid: {note_id}\ncreated: {created}\nmodified: {created}\ntags:\n  - meeting\ntype: meeting\n---\n"
     );
 
     let body = format!(
@@ -1581,12 +1578,12 @@ async fn create_error_note(
 
     let full_content = format!("{frontmatter}{body}");
 
-    let meetings_dir = PathBuf::from(notes_dir).join("meetings");
+    let meetings_dir = crate::notes::meetings_dir(notes_dir);
     let _ = std::fs::create_dir_all(&meetings_dir);
 
     let filename = format!("{timestamp}-meeting.md");
     let file_path = meetings_dir.join(&filename);
-    let rel_path = format!("meetings/{filename}");
+    let rel_path = format!("notes/meetings/{filename}");
 
     if let Err(e) = std::fs::write(&file_path, &full_content) {
         eprintln!("recording: failed to write error note: {e}");
@@ -1601,7 +1598,6 @@ async fn create_error_note(
             created: created.clone(),
             modified: created,
             tags: vec!["meeting".to_string()],
-            starred: false,
         };
 
         if let Ok(mut index) = state.index.lock() {

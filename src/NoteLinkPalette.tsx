@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { searchNotes } from "./api";
+import { isPinnedNotePath, searchNotes } from "./api";
 import type { NoteMetadata } from "./api";
 
 interface NoteLinkPaletteProps {
@@ -74,7 +74,10 @@ export function NoteLinkPalette({
       } else if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         if (displayedNotes[activeIndex]) {
-          onSelect(displayedNotes[activeIndex].id, displayedNotes[activeIndex].title);
+          onSelect(
+            displayedNotes[activeIndex].id,
+            displayedNotes[activeIndex].title,
+          );
         }
       } else if (e.key === "Escape") {
         e.preventDefault();
@@ -108,6 +111,9 @@ export function NoteLinkPalette({
               }}
               onMouseEnter={() => setActiveIndex(i)}
             >
+              {isPinnedNotePath(note.path) && (
+                <span className="note-item-pin">📌</span>
+              )}
               {note.title}
             </button>
           ))}

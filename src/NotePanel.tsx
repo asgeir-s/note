@@ -16,12 +16,13 @@ import {
   saveNote,
   getNote,
   deleteNote,
-  toggleStar,
+  togglePin as togglePinApi,
   getRelatedNotes,
   regenerateTags,
   retranscribeNote,
   resummarizeNote,
   appendMeetingData as appendMeetingDataApi,
+  isPinnedNotePath,
 } from "./api";
 import type { NoteMetadata, SortBy, RecordingState } from "./api";
 
@@ -44,13 +45,14 @@ export interface PanelHandle {
   navigateList: (delta: number) => void;
   openSelectedNote: (metaKey: boolean) => void;
   getHighlightedNoteId: () => string | null;
-  toggleStar: () => Promise<void>;
+  togglePin: () => Promise<void>;
   deleteNote: () => Promise<void>;
   appendMeetingData: (summary: string, transcript: string) => Promise<void>;
 }
 
 interface NotePanelProps {
   recentNotes: NoteMetadata[];
+  pinnedNotes: NoteMetadata[];
   allTags: string[];
   onNoteClick: (noteId: string, metaKey: boolean) => void;
   onNoteNavigate?: (noteId: string, metaKey: boolean) => void;
@@ -77,6 +79,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
   (
     {
       recentNotes,
+      pinnedNotes,
       allTags,
       onNoteClick,
       onNoteNavigate,
@@ -117,7 +120,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     >("notes");
     const [userModified, setUserModified] = useState(independent ?? false);
     const [highlightIndex, setHighlightIndex] = useState(-1);
-    const [starred, setStarred] = useState(false);
+    const [pinned, setPinned] = useState(false);
+    const [showPinnedList, setShowPinnedList] = useState(false);
     const editorRef = useRef<{
       focus: () => void;
       blur: () => void;
@@ -218,7 +222,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           savedContentRef.current = note.content;
           savedTitleRef.current = note.title;
           savedTagsRef.current = note.tags;
-          setStarred(note.starred);
+          setPinned(isPinnedNotePath(note.path));
+          setShowPinnedList(false);
           setUserModified(false);
         } catch (e) {
           console.error("Failed to load note:", e);
@@ -247,7 +252,8 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       savedContentRef.current = "";
       savedTitleRef.current = "";
       savedTagsRef.current = [];
-      setStarred(false);
+      setPinned(false);
+      setShowPinnedList(false);
       setPrecomputedRelated([]);
       setShowTagInput(false);
       setUserModified(false);
@@ -283,9 +289,15 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         const tagsChanged =
           isNew ||
           JSON.stringify(tagsNow) !== JSON.stringify(savedTagsRef.current);
-        const meta = await saveNote(noteIdNow, contentNow, tagsNow, titleNow || null, {
-          deferProcessing,
-        });
+        const meta = await saveNote(
+          noteIdNow,
+          contentNow,
+          tagsNow,
+          titleNow || null,
+          {
+            deferProcessing,
+          },
+        );
         setTitle(meta.title);
         titleRef.current = meta.title;
         titleManuallyEditedRef.current = false;
@@ -295,7 +307,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         savedContentRef.current = contentNow;
         savedTitleRef.current = meta.title;
         savedTagsRef.current = tagsNow;
-        setStarred(meta.starred);
+        setPinned(isPinnedNotePath(meta.path));
         setUserModified(keepEditing);
         if (tagsChanged) {
           setRelatedLoading(true);
@@ -326,14 +338,39 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       }
     }, [saveIfNeeded]);
 
+    const handleTogglePin = useCallback(async () => {
+      const noteId = loadedNoteIdRef.current;
+      if (!noteId) return;
+      try {
+        if (hasUnsavedChanges(true)) {
+          await persistNote({
+            keepEditing: userModified,
+            allowEmpty: true,
+          });
+        }
+        const updated = await togglePinApi(noteId);
+        setPinned(isPinnedNotePath(updated.path));
+        await onSaved();
+      } catch (e) {
+        console.error("Failed to toggle pin:", e);
+      }
+    }, [hasUnsavedChanges, onSaved, persistNote, userModified]);
+
     const displayedNotes = useMemo(() => {
       // Existing note (viewing or editing) — show precomputed related
       if (loadedNoteId) return precomputedRelated;
-      // New panel with no note loaded — show recent notes
-      if (!isTyping) return recentNotes;
+      // New panel with no note loaded — show recent notes or pinned docs
+      if (!isTyping) return showPinnedList ? pinnedNotes : recentNotes;
       // Typing in a new note — show nothing
       return [];
-    }, [isTyping, loadedNoteId, precomputedRelated, recentNotes]);
+    }, [
+      isTyping,
+      loadedNoteId,
+      precomputedRelated,
+      recentNotes,
+      pinnedNotes,
+      showPinnedList,
+    ]);
 
     useImperativeHandle(
       ref,
@@ -359,6 +396,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
                 tagsRef.current = merged;
                 savedTagsRef.current = merged;
               }
+              setPinned(isPinnedNotePath(note.path));
               if (
                 !titleManuallyEditedRef.current &&
                 isAutoMeetingTitle(titleRef.current) &&
@@ -466,16 +504,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           }
           return null;
         },
-        toggleStar: async () => {
-          if (!loadedNoteId) return;
-          try {
-            const updated = await toggleStar(loadedNoteId);
-            setStarred(updated.starred);
-            await onSaved();
-          } catch (e) {
-            console.error("Failed to toggle star:", e);
-          }
-        },
+        togglePin: handleTogglePin,
         deleteNote: async () => {
           if (!loadedNoteId) return;
           try {
@@ -532,6 +561,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         loadNoteInternal,
         clearPanel,
         handleSave,
+        handleTogglePin,
         saveIfNeeded,
         userModified,
         loadedNoteId,
@@ -719,7 +749,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       void regenerateTagsForNote(loadedNoteId);
     }, [loadedNoteId, regeneratingTags, tags, regenerateTagsForNote]);
 
-    const listLabel = loadedNoteId ? "Related" : "Recent";
+    const listLabel = loadedNoteId
+      ? "Related"
+      : showPinnedList
+        ? "Pinned"
+        : "Recent";
 
     // Reset highlight when notes list changes
     useEffect(() => {
@@ -776,6 +810,29 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           </div>
         )}
         <div className="panel-indicators">
+          {loadedNoteId && (
+            <button
+              className={`pin-toggle-btn ${pinned ? "active" : ""}`}
+              onClick={() => void handleTogglePin()}
+              title={pinned ? "Unpin" : "Pin"}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill={pinned ? "currentColor" : "none"}
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <line x1="12" x2="12" y1="17" y2="22" />
+                <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+              </svg>
+            </button>
+          )}
           <div
             className={`editing-indicator ${userModified ? "visible" : ""}`}
             role="status"
@@ -783,59 +840,51 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           >
             Editing
           </div>
-          {starred && loadedNoteId && (
-            <div className="star-indicator" role="status">
-              Starred
-            </div>
-          )}
-          {recording?.active && isRecordingPanel ? (
-            <button
-              className="record-btn recording"
-              onClick={onStopRecording}
-              style={{ marginLeft: "auto" }}
-            >
-              <span className="rec-dot" />
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                {String(Math.floor(recording.elapsed_seconds / 60)).padStart(
-                  1,
-                  "0",
-                )}
-                :{String(recording.elapsed_seconds % 60).padStart(2, "0")}
+          <div className="panel-actions">
+            {recording?.active && isRecordingPanel ? (
+              <button
+                className="record-btn recording"
+                onClick={onStopRecording}
+              >
+                <span className="rec-dot" />
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {String(Math.floor(recording.elapsed_seconds / 60)).padStart(
+                    1,
+                    "0",
+                  )}
+                  :{String(recording.elapsed_seconds % 60).padStart(2, "0")}
+                </span>
+                <span className="level-bars">
+                  <span
+                    className="level-bar mic"
+                    style={{
+                      height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%`,
+                    }}
+                  />
+                  <span
+                    className="level-bar system"
+                    style={{
+                      height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%`,
+                    }}
+                  />
+                </span>
+              </button>
+            ) : effectiveProcessingProgress ? (
+              <span className="recording-progress-text">
+                {effectiveProcessingProgress.replace(/\.+$/, "")}
+                <span className="related-loading"> ...</span>
               </span>
-              <span className="level-bars">
-                <span
-                  className="level-bar mic"
-                  style={{
-                    height: `${Math.min(100, (recording.mic_level ?? 0) * 300)}%`,
-                  }}
-                />
-                <span
-                  className="level-bar system"
-                  style={{
-                    height: `${Math.min(100, (recording.system_level ?? 0) * 300)}%`,
-                  }}
-                />
-              </span>
-            </button>
-          ) : effectiveProcessingProgress ? (
-            <span
-              className="recording-progress-text"
-              style={{ marginLeft: "auto" }}
-            >
-              {effectiveProcessingProgress.replace(/\.+$/, "")}
-              <span className="related-loading"> ...</span>
-            </span>
-          ) : tags.includes("meeting") && loadedNoteId ? null : (
-            <button
-              className="record-btn"
-              onClick={onStartRecording}
-              disabled={!!recordingLocked}
-              title="Record"
-              style={{ marginLeft: "auto" }}
-            >
-              ●
-            </button>
-          )}
+            ) : tags.includes("meeting") && loadedNoteId ? null : (
+              <button
+                className="record-btn"
+                onClick={onStartRecording}
+                disabled={!!recordingLocked}
+                title="Record"
+              >
+                ●
+              </button>
+            )}
+          </div>
         </div>
         <div style={{ display: editing ? undefined : "none" }}>
           <Editor
@@ -965,6 +1014,22 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
           highlightIndex={highlightIndex}
           sortBy={sortBy}
           onSortChange={onSortChange}
+          tabs={
+            !loadedNoteId && !isTyping
+              ? [
+                  {
+                    label: "Recent",
+                    active: !showPinnedList,
+                    onClick: () => setShowPinnedList(false),
+                  },
+                  {
+                    label: "Pinned",
+                    active: showPinnedList,
+                    onClick: () => setShowPinnedList(true),
+                  },
+                ]
+              : undefined
+          }
         />
       </div>
     );

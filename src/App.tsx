@@ -5,6 +5,7 @@ import type { PanelHandle } from "./NotePanel";
 import { DragSplitter } from "./DragSplitter";
 import {
   listRecentNotes,
+  listPinnedNotes,
   getAllTags,
   rebuildIndex,
   importMarkdownFile,
@@ -69,6 +70,7 @@ export default function App() {
   const [panelWidths, setPanelWidths] = useState<number[]>([1]);
   const [activePanelIndex, _setActivePanelIndex] = useState(0);
   const [recentNotes, setRecentNotes] = useState<NoteMetadata[]>([]);
+  const [pinnedNotes, setPinnedNotes] = useState<NoteMetadata[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
   const [showHotkeys, setShowHotkeys] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>("created");
@@ -84,6 +86,10 @@ export default function App() {
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [notesDirBanner, setNotesDirBanner] = useState(false);
   const [notesDirPath, setNotesDirPath] = useState("");
+  const [currentNotesDir, setCurrentNotesDir] = useState<string | null>(null);
+  const [connectedGitRemote, setConnectedGitRemote] = useState<string | null>(
+    null,
+  );
   const [gitBanner, setGitBanner] = useState(false);
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitError, setGitError] = useState<string | null>(null);
@@ -230,6 +236,14 @@ export default function App() {
   useEffect(() => {
     if (showSettings) {
       void fetchModelData();
+      void Promise.all([getNotesDir(), getGitRemote()])
+        .then(([dir, remote]) => {
+          setCurrentNotesDir(dir);
+          setConnectedGitRemote(remote);
+        })
+        .catch(() => {
+          // ignore
+        });
     }
   }, [showSettings, fetchModelData]);
 
@@ -263,11 +277,13 @@ export default function App() {
 
   const refreshSharedState = useCallback(async () => {
     try {
-      const [notes, tags] = await Promise.all([
+      const [notes, pinned, tags] = await Promise.all([
         listRecentNotes(20, sortBy),
+        listPinnedNotes(sortBy),
         getAllTags(),
       ]);
       setRecentNotes(notes);
+      setPinnedNotes(pinned);
       setAllTags(tags);
     } catch {
       // Ignore errors
@@ -292,6 +308,7 @@ export default function App() {
   const checkGitSetup = useCallback(async () => {
     try {
       const remote = await getGitRemote();
+      setConnectedGitRemote(remote);
       setGitBanner(remote === null);
     } catch {
       // Not in Tauri or git not available
@@ -312,6 +329,7 @@ export default function App() {
       // First-run prompt for notes directory (before git setup).
       try {
         const currentNotesDir = await getNotesDir();
+        setCurrentNotesDir(currentNotesDir);
         const promptedNotesDir =
           localStorage.getItem(NOTES_DIR_PROMPT_KEY) === "1";
         if (currentNotesDir && !promptedNotesDir) {
@@ -1024,12 +1042,6 @@ export default function App() {
         }
         return;
       }
-      // Cmd+S — toggle star on current note
-      if (e.key === "s" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        activePanel.toggleStar();
-        return;
-      }
       // Cmd+E — edit current note
       if (e.key === "e" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
@@ -1111,8 +1123,18 @@ export default function App() {
         setZoom(100);
         return;
       }
+      // Cmd+Shift+P — toggle pin on current note
+      if (
+        e.key.toLowerCase() === "p" &&
+        e.shiftKey &&
+        (e.metaKey || e.ctrlKey)
+      ) {
+        e.preventDefault();
+        activePanel.togglePin();
+        return;
+      }
       // Cmd+P — open search palette
-      if (e.key === "p" && (e.metaKey || e.ctrlKey)) {
+      if (e.key.toLowerCase() === "p" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setSearchPaletteOpen(true);
         return;
@@ -1453,6 +1475,7 @@ export default function App() {
         await setNotesDir(nextDir);
         await refreshSharedState();
       }
+      setCurrentNotesDir(nextDir);
 
       localStorage.setItem(NOTES_DIR_PROMPT_KEY, "1");
       setNotesDirBanner(false);
@@ -1475,6 +1498,7 @@ export default function App() {
     if (!gitRemoteUrl.trim()) return;
     try {
       await setGitRemote(gitRemoteUrl.trim());
+      setConnectedGitRemote(gitRemoteUrl.trim());
       setGitBanner(false);
       setGitRemoteUrl("");
       setGitError(null);
@@ -1502,7 +1526,7 @@ export default function App() {
           <input
             className="git-banner-input"
             type="text"
-            placeholder="~/notes"
+            placeholder="~/dump"
             value={notesDirPath}
             onChange={(e) => setNotesDirPath(e.target.value)}
             onKeyDown={(e) => {
@@ -1561,6 +1585,7 @@ export default function App() {
               <NotePanel
                 ref={setPanelRef(panel.id)}
                 recentNotes={recentNotes}
+                pinnedNotes={pinnedNotes}
                 allTags={allTags}
                 onNoteClick={(noteId, metaKey) =>
                   handleNoteClick(index, noteId, metaKey)
@@ -1722,6 +1747,8 @@ export default function App() {
         createPortal(
           <SettingsPanel
             toolStatus={toolStatus}
+            notesDirPath={currentNotesDir}
+            gitRemoteUrl={connectedGitRemote}
             recordingDevice={recordingDevice}
             onDeviceChange={handleDeviceChange}
             onRefreshTools={async () => {
@@ -1769,16 +1796,16 @@ export default function App() {
                   <span>Search notes</span>
                 </div>
                 <div className="hotkey-row">
+                  <kbd>{primaryModifier}</kbd> <kbd>⇧</kbd> <kbd>P</kbd>
+                  <span>Toggle pin</span>
+                </div>
+                <div className="hotkey-row">
                   <kbd>{primaryModifier}</kbd> <kbd>N</kbd>
                   <span>New note</span>
                 </div>
                 <div className="hotkey-row">
                   <kbd>{primaryModifier}</kbd> <kbd>E</kbd>
                   <span>Edit note</span>
-                </div>
-                <div className="hotkey-row">
-                  <kbd>{primaryModifier}</kbd> <kbd>S</kbd>
-                  <span>Star note</span>
                 </div>
                 <div className="hotkey-row">
                   <kbd>{primaryModifier}</kbd> <kbd>D</kbd>
