@@ -48,6 +48,7 @@ pub const NOTES_COLLECTION_DIR: &str = "notes";
 pub const PINNED_COLLECTION_DIR: &str = "pinned";
 pub const MEETINGS_REL_DIR: &str = "notes/meetings";
 pub const MEETING_AUDIO_REL_DIR: &str = "notes/meetings/.audio";
+const INDEX_FILE: &str = ".lore-index.json";
 
 pub fn notes_collection_dir(root_dir: &str) -> PathBuf {
     Path::new(root_dir).join(NOTES_COLLECTION_DIR)
@@ -90,10 +91,7 @@ fn collision_safe_dest_path(dest: &Path) -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let stem = dest
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("note");
+    let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("note");
     let ext = dest.extension().and_then(|s| s.to_str());
 
     for i in 1..=9_999 {
@@ -439,13 +437,9 @@ pub fn save_note(
     }
     fs::write(&file_path, &full_content)?;
 
-    let filename = normalize_rel_path(
-        file_path
-            .strip_prefix(notes_dir)
-            .unwrap_or(&file_path),
-    )
-    .trim_start_matches('/')
-    .to_string();
+    let filename = normalize_rel_path(file_path.strip_prefix(notes_dir).unwrap_or(&file_path))
+        .trim_start_matches('/')
+        .to_string();
 
     let meta = NoteMetadata {
         id: note_id.clone(),
@@ -652,8 +646,7 @@ pub fn set_auto_tags(
         return Ok(None);
     }
 
-    let is_meeting_note =
-        meta.tags.iter().any(|t| t == "meeting") || is_meeting_path(&meta.path);
+    let is_meeting_note = meta.tags.iter().any(|t| t == "meeting") || is_meeting_path(&meta.path);
 
     // Normal flow:
     // - For regular notes, only auto-tag when empty.
@@ -781,11 +774,9 @@ pub fn list_pinned_notes(index: &NoteIndex, sort_by: &str) -> Vec<NoteMetadata> 
 }
 
 fn sort_note_refs(notes: &mut Vec<&NoteMetadata>, sort_by: &str) {
-    notes.sort_by(|a, b| {
-        match sort_by {
-            "modified" => b.modified.cmp(&a.modified),
-            _ => b.created.cmp(&a.created),
-        }
+    notes.sort_by(|a, b| match sort_by {
+        "modified" => b.modified.cmp(&a.modified),
+        _ => b.created.cmp(&a.created),
     });
 }
 
@@ -1022,7 +1013,9 @@ fn migrate_starred_notes(notes_dir: &str) -> io::Result<()> {
                 };
                 let (fm, body) = parse_frontmatter(&raw);
                 let Some(fm) = fm else { continue };
-                let Some(was_starred) = fm.starred else { continue };
+                let Some(was_starred) = fm.starred else {
+                    continue;
+                };
                 if fm.id.is_none() {
                     continue;
                 }
@@ -1100,11 +1093,10 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
                         if let Some(id) = fm.id {
                             let title = fm.title.unwrap_or_else(|| extract_title(&body));
                             // Store relative path from notes_dir.
-                            let rel_path = normalize_rel_path(
-                                entry.strip_prefix(notes_dir).unwrap_or(&entry),
-                            )
-                            .trim_start_matches('/')
-                            .to_string();
+                            let rel_path =
+                                normalize_rel_path(entry.strip_prefix(notes_dir).unwrap_or(&entry))
+                                    .trim_start_matches('/')
+                                    .to_string();
                             let created = fm.created.unwrap_or_default();
                             let modified = fm.modified.unwrap_or_else(|| created.clone());
                             let meta = NoteMetadata {
@@ -1127,14 +1119,14 @@ pub fn rebuild_index(notes_dir: &str) -> io::Result<NoteIndex> {
     Ok(index)
 }
 
-/// Save the index to .dump-index.json (public for use by recording module)
+/// Save the index to .lore-index.json (public for use by recording module)
 pub fn save_index_pub(notes_dir: &str, index: &NoteIndex) -> io::Result<()> {
     save_index(notes_dir, index)
 }
 
-/// Save the index to .dump-index.json
+/// Save the index to .lore-index.json
 fn save_index(notes_dir: &str, index: &NoteIndex) -> io::Result<()> {
-    let index_path = Path::new(notes_dir).join(".dump-index.json");
+    let index_path = Path::new(notes_dir).join(INDEX_FILE);
     let json =
         serde_json::to_string_pretty(index).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     fs::write(index_path, json)
@@ -1461,7 +1453,7 @@ mod tests {
     use std::fs;
 
     fn setup_test_dir() -> String {
-        let dir = format!("/tmp/dump_test_{}", Uuid::new_v4());
+        let dir = format!("/tmp/lore_test_{}", Uuid::new_v4());
         fs::create_dir_all(&dir).unwrap();
         dir
     }

@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 const DEBOUNCE: Duration = Duration::from_secs(2);
 const PULL_INTERVAL: Duration = Duration::from_secs(60);
+const INDEX_FILE: &str = ".lore-index.json";
+const RELATED_CACHE_FILE: &str = ".lore-related.json";
 
 /// Describes a file change to be committed.
 #[derive(Debug, Clone)]
@@ -681,13 +683,13 @@ async fn stage_managed_paths(dir: &Path) {
     let _ = git(dir, &["add", "-A", "notes"]).await;
     let _ = git(dir, &["add", "-A", "pinned"]).await;
     let _ = git(dir, &["add", "-A", "inbox"]).await;
-    let _ = git(dir, &["add", ".dump-index.json"]).await;
-    let _ = git(dir, &["add", ".dump-related.json"]).await;
+    let _ = git(dir, &["add", INDEX_FILE]).await;
+    let _ = git(dir, &["add", RELATED_CACHE_FILE]).await;
 }
 
 fn ensure_gitignore_rules(dir: &Path) -> Result<bool, String> {
     const REQUIRED_LINES: &[&str] = &[
-        ".dump-index.json",
+        INDEX_FILE,
         ".DS_Store",
         "*.swp",
         "*.tmp",
@@ -990,7 +992,7 @@ mod tests {
     use super::*;
 
     fn make_temp_dir() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("dump_git_sync_test_{}", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("lore_git_sync_test_{}", Uuid::new_v4()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }
@@ -999,12 +1001,13 @@ mod tests {
     fn test_ensure_gitignore_rules_appends_new_audio_ignore() {
         let dir = make_temp_dir();
         let gitignore = dir.join(".gitignore");
-        std::fs::write(&gitignore, ".dump-index.json\n.DS_Store\n*.swp\n*.tmp\n").unwrap();
+        std::fs::write(&gitignore, ".lore-index.json\n.DS_Store\n*.swp\n*.tmp\n").unwrap();
 
         let changed = ensure_gitignore_rules(&dir).unwrap();
         assert!(changed);
 
         let content = std::fs::read_to_string(&gitignore).unwrap();
+        assert!(content.contains(".lore-index.json\n"));
         assert!(content.contains("notes/meetings/.audio/\n"));
 
         std::fs::remove_dir_all(dir).ok();
@@ -1020,7 +1023,7 @@ mod tests {
         assert!(!changed_twice);
 
         let content = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
-        assert!(content.contains(".dump-index.json\n"));
+        assert!(content.contains(".lore-index.json\n"));
         assert!(content.contains("notes/meetings/.audio/\n"));
 
         std::fs::remove_dir_all(dir).ok();

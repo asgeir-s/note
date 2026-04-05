@@ -1,8 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
-  "productName": "Dump",
+  "productName": "Lore",
+  "mainBinaryName": "lore",
   "version": "0.1.0",
-  "identifier": "com.dump.notes",
+  "identifier": "com.lore.notes",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -30,7 +31,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "Dump",
+        "title": "Lore",
         "width": 800,
         "height": 700,
         "resizable": true,

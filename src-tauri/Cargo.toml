@@ -1,14 +1,14 @@
 [package]
-name = "dump"
+name = "lore"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "dump_lib"
+name = "lore_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "dump"
+name = "lore"
 path = "src/main.rs"
 
 [build-dependencies]

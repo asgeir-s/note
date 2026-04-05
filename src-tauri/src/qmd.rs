@@ -1,16 +1,20 @@
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::{Emitter, Manager, State};
-use tokio::process::Command;
+use tokio::process::Command as TokioCommand;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{Duration, Instant};
 
 const DEBOUNCE: Duration = Duration::from_secs(5);
 const REINDEX_INTERVAL: Duration = Duration::from_secs(300);
 const STARTUP_PENDING_DELAY: Duration = Duration::from_secs(1);
+const RELATED_CACHE_FILE: &str = ".lore-related.json";
+const PENDING_FILE: &str = ".lore-qmd-pending.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelatedEntry {
@@ -50,7 +54,7 @@ impl QmdHandle {
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let dir = PathBuf::from(notes_dir);
-        let cache_path = dir.join(".dump-related.json");
+        let cache_path = cache_path(&dir);
         let initial_pending = load_pending(&pending_path(&dir));
 
         let cache = load_cache(&cache_path);
@@ -97,11 +101,17 @@ pub fn defer_note_processing(notes_dir: &str, id: &str, title: &str) {
     save_pending(&path, &pending);
 }
 
+fn cache_path(notes_dir: &Path) -> PathBuf {
+    notes_dir.join(RELATED_CACHE_FILE)
+}
+
 fn load_cache(path: &Path) -> RelatedCache {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        if let Ok(cache) = serde_json::from_str(&contents) {
+            return cache;
+        }
+    }
+    RelatedCache::default()
 }
 
 fn save_cache(path: &Path, cache: &RelatedCache) {
@@ -111,14 +121,16 @@ fn save_cache(path: &Path, cache: &RelatedCache) {
 }
 
 fn pending_path(notes_dir: &Path) -> PathBuf {
-    notes_dir.join(".dump-qmd-pending.json")
+    notes_dir.join(PENDING_FILE)
 }
 
 fn load_pending(path: &Path) -> HashMap<String, String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        if let Ok(pending) = serde_json::from_str(&contents) {
+            return pending;
+        }
+    }
+    HashMap::default()
 }
 
 fn save_pending(path: &Path, pending: &HashMap<String, String>) {
@@ -131,61 +143,132 @@ fn save_pending(path: &Path, pending: &HashMap<String, String>) {
     }
 }
 
-/// Build an enriched PATH so that bundled macOS apps can find tools like qmd and ollama
-/// which are typically installed in locations not in the default app PATH.
-pub(crate) fn enriched_path() -> String {
-    let base = std::env::var("PATH").unwrap_or_default();
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
-    let mut preferred: Vec<String> = Vec::new();
-
-    // nvm: prefer the newest installed Node bin so npm-installed CLIs resolve
-    // against the matching runtime instead of an older Homebrew/global Node.
-    let nvm_dir = format!("{home}/.nvm/versions/node");
-    if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
-        let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+fn nvm_bin_dirs(root: &Path) -> Vec<String> {
+    let mut bins: Vec<(std::time::SystemTime, String)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
             let bin = entry.path().join("bin");
-            if bin.is_dir() {
-                if let Ok(meta) = entry.metadata() {
-                    let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                    if best.as_ref().map_or(true, |(t, _)| modified > *t) {
-                        best = Some((modified, bin));
-                    }
-                }
+            if !bin.is_dir() {
+                continue;
             }
-        }
-        if let Some((_, bin)) = best {
-            preferred.push(bin.to_string_lossy().to_string());
+            let modified = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            bins.push((modified, bin.to_string_lossy().to_string()));
         }
     }
+    bins.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    bins.into_iter().map(|(_, path)| path).collect()
+}
 
+fn preferred_path_entries(home: &str) -> Vec<String> {
+    let mut preferred = nvm_bin_dirs(&Path::new(home).join(".nvm/versions/node"));
     preferred.extend([
         format!("{home}/.volta/bin"),
         format!("{home}/.local/bin"),
+        format!("{home}/.linuxbrew/bin"),
+        format!("{home}/.linuxbrew/sbin"),
+        format!("{home}/.npm/bin"),
+        format!("{home}/.npm-global/bin"),
+        format!("{home}/.yarn/bin"),
+        format!("{home}/.config/yarn/global/node_modules/.bin"),
+        format!("{home}/.local/share/pnpm"),
+        format!("{home}/.bun/bin"),
+        format!("{home}/.asdf/shims"),
+        format!("{home}/.n/bin"),
         "/opt/homebrew/bin".into(),
         "/opt/homebrew/sbin".into(),
+        "/home/linuxbrew/.linuxbrew/bin".into(),
+        "/home/linuxbrew/.linuxbrew/sbin".into(),
         "/usr/local/bin".into(),
+        "/usr/local/sbin".into(),
         "/usr/bin".into(),
+        "/usr/sbin".into(),
         "/bin".into(),
+        "/snap/bin".into(),
     ]);
+    preferred
+}
 
-    let mut parts: Vec<String> = Vec::new();
-    for p in preferred {
-        if !p.is_empty() && !parts.iter().any(|existing| existing == &p) {
-            parts.push(p);
-        }
+fn push_unique(parts: &mut Vec<String>, candidate: &str) {
+    if !candidate.is_empty() && !parts.iter().any(|existing| existing == candidate) {
+        parts.push(candidate.to_string());
     }
-    for p in base.split(':') {
-        if !p.is_empty() && !parts.iter().any(|existing| existing == p) {
-            parts.push(p.to_string());
-        }
+}
+
+fn prepend_path(dir: &str, path: &str) -> String {
+    let mut parts = Vec::new();
+    push_unique(&mut parts, dir);
+    for p in path.split(':') {
+        push_unique(&mut parts, p);
     }
     parts.join(":")
 }
 
-pub(crate) fn cmd(program: &str) -> Command {
-    let mut c = Command::new(program);
-    c.env("PATH", enriched_path());
+/// Build an enriched PATH so desktop app launches can still find external tools even when
+/// the GUI process inherits a narrower PATH than an interactive shell.
+pub(crate) fn enriched_path() -> String {
+    static ENRICHED_PATH: OnceLock<String> = OnceLock::new();
+    ENRICHED_PATH
+        .get_or_init(|| {
+            let base = std::env::var("PATH").unwrap_or_default();
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/default".to_string());
+            let mut parts: Vec<String> = Vec::new();
+            for p in preferred_path_entries(&home) {
+                push_unique(&mut parts, &p);
+            }
+            for p in base.split(':') {
+                push_unique(&mut parts, p);
+            }
+            parts.join(":")
+        })
+        .clone()
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file() && (meta.permissions().mode() & 0o111 != 0))
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file())
+        .unwrap_or(false)
+}
+
+fn resolved_program_path(program: &str) -> Option<PathBuf> {
+    if program.contains('/') {
+        let path = PathBuf::from(program);
+        return is_executable_file(&path).then_some(path);
+    }
+
+    for dir in enriched_path().split(':') {
+        let candidate = Path::new(dir).join(program);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub(crate) fn cmd(program: &str) -> TokioCommand {
+    let path = enriched_path();
+    if let Some(resolved) = resolved_program_path(program) {
+        let mut c = TokioCommand::new(&resolved);
+        if let Some(parent) = resolved.parent().and_then(Path::to_str) {
+            c.env("PATH", prepend_path(parent, &path));
+        } else {
+            c.env("PATH", &path);
+        }
+        return c;
+    }
+
+    let mut c = TokioCommand::new(program);
+    c.env("PATH", path);
     c
 }
 
@@ -270,12 +353,7 @@ async fn ensure_context(dir: &Path, target: &str, text: &str) -> Result<(), Stri
 }
 
 async fn ensure_qmd_setup(dir: &Path) -> Result<(), String> {
-    ensure_collection(
-        dir,
-        "notes",
-        &dir.join(crate::notes::NOTES_COLLECTION_DIR),
-    )
-    .await?;
+    ensure_collection(dir, "notes", &dir.join(crate::notes::NOTES_COLLECTION_DIR)).await?;
     ensure_collection(
         dir,
         "pinned",
@@ -337,7 +415,7 @@ async fn run_worker(
         eprintln!("qmd: ollama not available, using title-only queries");
     }
 
-    let cache_path = dir.join(".dump-related.json");
+    let cache_path = cache_path(&dir);
     let pending_path = pending_path(&dir);
     let mut deadline = if pending.is_empty() {
         None
@@ -1107,7 +1185,7 @@ pub struct ToolStatus {
 
 #[tauri::command]
 pub async fn check_tools() -> ToolStatus {
-    let git = Command::new("git")
+    let git = cmd("git")
         .arg("--version")
         .output()
         .await
@@ -1151,6 +1229,50 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn nvm_bin_dirs_includes_all_versions() {
+        let root = std::env::temp_dir().join(format!("lore-qmd-test-{}", uuid::Uuid::new_v4()));
+        let v20 = root.join("v20.0.0/bin");
+        let v22 = root.join("v22.0.0/bin");
+        std::fs::create_dir_all(&v20).unwrap();
+        std::fs::create_dir_all(&v22).unwrap();
+
+        let bins = nvm_bin_dirs(&root);
+
+        assert_eq!(bins.len(), 2);
+        assert!(bins.iter().any(|path| path.ends_with("v20.0.0/bin")));
+        assert!(bins.iter().any(|path| path.ends_with("v22.0.0/bin")));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepend_path_moves_resolved_bin_to_front_once() {
+        assert_eq!(
+            prepend_path("/custom/bin", "/usr/local/bin:/custom/bin:/usr/bin"),
+            "/custom/bin:/usr/local/bin:/usr/bin"
+        );
+    }
+
+    #[test]
+    fn preferred_path_entries_include_linuxbrew_locations() {
+        let entries = preferred_path_entries("/home/asgeir");
+
+        assert!(entries
+            .iter()
+            .any(|path| path == "/home/asgeir/.linuxbrew/bin"));
+        assert!(entries
+            .iter()
+            .any(|path| path == "/home/asgeir/.linuxbrew/sbin"));
+        assert!(entries
+            .iter()
+            .any(|path| path == "/home/linuxbrew/.linuxbrew/bin"));
+        assert!(entries
+            .iter()
+            .any(|path| path == "/home/linuxbrew/.linuxbrew/sbin"));
+        assert!(entries.iter().any(|path| path == "/usr/local/bin"));
     }
 
     #[test]

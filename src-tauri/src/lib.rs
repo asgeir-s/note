@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, RunEvent, State};
 
+const DEFAULT_NOTES_DIR_NAME: &str = "lore";
+const MODEL_SETTINGS_FILE: &str = ".lore-models.json";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelSettings {
     pub keyword_model: Option<String>,
@@ -25,7 +28,7 @@ struct AppSettings {
 }
 
 fn default_notes_dir() -> String {
-    format!("{}/dump", dirs_home())
+    format!("{}/{}", dirs_home(), DEFAULT_NOTES_DIR_NAME)
 }
 
 fn app_settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -36,18 +39,19 @@ fn app_settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("settings.json"))
 }
 
-fn load_app_settings_from_path(path: &Path) -> AppSettings {
+fn read_app_settings_from_path(path: &Path) -> Option<AppSettings> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
 }
 
 fn load_app_settings(app_handle: &tauri::AppHandle) -> AppSettings {
-    app_settings_path(app_handle)
-        .ok()
-        .map(|path| load_app_settings_from_path(&path))
-        .unwrap_or_default()
+    if let Ok(path) = app_settings_path(app_handle) {
+        if let Some(settings) = read_app_settings_from_path(&path) {
+            return settings;
+        }
+    }
+    AppSettings::default()
 }
 
 fn save_app_settings_to_path(path: &Path, settings: &AppSettings) -> Result<(), String> {
@@ -75,15 +79,17 @@ fn resolve_notes_dir(settings: &AppSettings) -> String {
 }
 
 fn model_settings_path(notes_dir: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(notes_dir).join(".dump-models.json")
+    std::path::PathBuf::from(notes_dir).join(MODEL_SETTINGS_FILE)
 }
 
 fn load_model_settings(notes_dir: &str) -> ModelSettings {
     let path = model_settings_path(notes_dir);
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        if let Ok(settings) = serde_json::from_str(&contents) {
+            return settings;
+        }
+    }
+    ModelSettings::default()
 }
 
 fn save_model_settings(notes_dir: &str, settings: &ModelSettings) {
@@ -912,7 +918,7 @@ mod tests {
 
     #[test]
     fn app_settings_round_trip_persists_notes_dir() {
-        let temp_dir = std::env::temp_dir().join(format!("dump-settings-{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!("lore-settings-{}", uuid::Uuid::new_v4()));
         let settings_path = temp_dir.join("settings.json");
         let settings = AppSettings {
             notes_dir: Some("/tmp/custom-notes".to_string()),
@@ -920,7 +926,7 @@ mod tests {
 
         save_app_settings_to_path(&settings_path, &settings).unwrap();
 
-        let loaded = load_app_settings_from_path(&settings_path);
+        let loaded = read_app_settings_from_path(&settings_path).unwrap();
         assert_eq!(loaded.notes_dir.as_deref(), Some("/tmp/custom-notes"));
 
         let _ = std::fs::remove_dir_all(temp_dir);

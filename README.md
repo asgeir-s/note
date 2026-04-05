@@ -1,4 +1,4 @@
-# Dump
+# Lore
 
 A zero-friction personal note capture app. Keep notes lightweight, searchable, and easy to revisit.
 
@@ -83,11 +83,11 @@ Use **Save** (or press `Enter`) after editing either field.
 
 ## Pending Processing (QMD)
 
-Dump can defer some note processing so edits are never blocked by background indexing/tagging.
+Lore can defer some note processing so edits are never blocked by background indexing/tagging.
 
 - Note saves are written immediately.
 - QMD work (auto-tags + related notes refresh) can be queued as **pending**.
-- Pending QMD work is persisted in `.dump-qmd-pending.json` inside your notes root.
+- Pending QMD work is persisted in `.lore-qmd-pending.json` inside your notes root.
 - On next app start, pending items are resumed automatically.
 
 What this means in practice:
@@ -98,9 +98,9 @@ What this means in practice:
 
 Related runtime files in the notes root:
 
-- `.dump-index.json`: metadata index cache
-- `.dump-related.json`: related-notes cache
-- `.dump-qmd-pending.json`: deferred QMD processing queue
+- `.lore-index.json`: metadata index cache
+- `.lore-related.json`: related-notes cache
+- `.lore-qmd-pending.json`: deferred QMD processing queue
 
 ## Document Format
 
@@ -118,10 +118,10 @@ tags: [strategy, fundraising]
 Content goes here. Link to [[note:e5f6a7b8-1234-5678-90ab-cdef12345678]] another note.
 ```
 
-Dump stores documents under a configurable root:
+Lore stores documents under a configurable root:
 
 ```text
-~/dump/
+~/lore/
   notes/
   pinned/
 ```

@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for Dump app",
+  "description": "Default capabilities for Lore app",
   "windows": ["main"],
   "permissions": [
     "core:default",

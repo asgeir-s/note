@@ -1526,7 +1526,7 @@ export default function App() {
           <input
             className="git-banner-input"
             type="text"
-            placeholder="~/dump"
+            placeholder="~/lore"
             value={notesDirPath}
             onChange={(e) => setNotesDirPath(e.target.value)}
             onKeyDown={(e) => {

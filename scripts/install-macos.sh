@@ -13,8 +13,8 @@ cd "$ROOT_DIR"
 npm install
 npx tauri build --bundles app
 
-APP_SRC="src-tauri/target/release/bundle/macos/Dump.app"
-APP_DST="/Applications/Dump.app"
+APP_SRC="src-tauri/target/release/bundle/macos/Lore.app"
+APP_DST="/Applications/Lore.app"
 
 if [ ! -d "$APP_SRC" ]; then
   echo "Build completed but ${APP_SRC} was not found."
