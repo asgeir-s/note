@@ -51,6 +51,8 @@ export interface PanelHandle {
 }
 
 interface NotePanelProps {
+  draftStorageKey: string;
+  allowGlobalDraftRestore?: boolean;
   recentNotes: NoteMetadata[];
   pinnedNotes: NoteMetadata[];
   allTags: string[];
@@ -75,9 +77,86 @@ interface NotePanelProps {
   onBgJob?: (key: string, label: string | null, noteId?: string) => void;
 }
 
+interface LocalDraft {
+  version: 1;
+  sourceKey: string;
+  noteId: string | null;
+  title: string;
+  content: string;
+  tags: string[];
+  updatedAt: number;
+}
+
+const DRAFT_STORAGE_PREFIX = "lore-draft-v1:";
+const DRAFT_LATEST_KEY = "lore-draft-latest-v1";
+const DRAFT_AUTOSAVE_DELAY_MS = 350;
+const DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 14;
+
+function readDraft(key: string): LocalDraft | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LocalDraft> | null;
+    if (!parsed || parsed.version !== 1) return null;
+    if (typeof parsed.sourceKey !== "string") return null;
+    if (parsed.noteId !== null && typeof parsed.noteId !== "string") return null;
+    if (typeof parsed.title !== "string") return null;
+    if (typeof parsed.content !== "string") return null;
+    if (!Array.isArray(parsed.tags)) return null;
+    if (typeof parsed.updatedAt !== "number" || !Number.isFinite(parsed.updatedAt)) {
+      return null;
+    }
+    const tags = parsed.tags.filter((t): t is string => typeof t === "string");
+    return {
+      version: 1,
+      sourceKey: parsed.sourceKey,
+      noteId: parsed.noteId,
+      title: parsed.title,
+      content: parsed.content,
+      tags,
+      updatedAt: parsed.updatedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(key: string, draft: LocalDraft): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(draft));
+  } catch {
+    // Ignore storage quota/availability errors.
+  }
+}
+
+function removeDraft(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function isDraftMeaningful(draft: Pick<LocalDraft, "title" | "content" | "tags">): boolean {
+  return (
+    draft.content.trim().length > 0 ||
+    draft.title.trim().length > 0 ||
+    draft.tags.length > 0
+  );
+}
+
+function isDraftFresh(draft: LocalDraft): boolean {
+  return Date.now() - draft.updatedAt <= DRAFT_MAX_AGE_MS;
+}
+
 export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
   (
     {
+      draftStorageKey,
+      allowGlobalDraftRestore = false,
       recentNotes,
       pinnedNotes,
       allTags,
@@ -139,6 +218,9 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     const savedTagsRef = useRef<string[]>([]);
     const titleManuallyEditedRef = useRef(false);
     const autoTagAttemptedRef = useRef<Set<string>>(new Set());
+    const draftRestoreCheckedRef = useRef(false);
+
+    const panelDraftKey = `${DRAFT_STORAGE_PREFIX}${draftStorageKey}`;
 
     const editing = userModified || !loadedNoteId;
     const isTyping = editing && content.trim().length > 0;
@@ -196,6 +278,28 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       [resolveCurrentTags],
     );
 
+    const clearLocalDraft = useCallback(() => {
+      removeDraft(panelDraftKey);
+      const latest = readDraft(DRAFT_LATEST_KEY);
+      if (latest?.sourceKey === draftStorageKey) {
+        removeDraft(DRAFT_LATEST_KEY);
+      }
+    }, [panelDraftKey, draftStorageKey]);
+
+    const persistLocalDraft = useCallback(() => {
+      const draft: LocalDraft = {
+        version: 1,
+        sourceKey: draftStorageKey,
+        noteId: loadedNoteIdRef.current,
+        title: titleRef.current,
+        content: contentRef.current,
+        tags: tagsRef.current,
+        updatedAt: Date.now(),
+      };
+      writeDraft(panelDraftKey, draft);
+      writeDraft(DRAFT_LATEST_KEY, draft);
+    }, [draftStorageKey, panelDraftKey]);
+
     const isAutoMeetingTitle = useCallback((value: string) => {
       return value === "Meeting about" || value.startsWith("Meeting about ");
     }, []);
@@ -240,6 +344,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     );
 
     const clearPanel = useCallback(() => {
+      clearLocalDraft();
       setContent("");
       contentRef.current = "";
       setTitle("");
@@ -260,7 +365,7 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
       historyRef.current = [];
       autoTagAttemptedRef.current.clear();
       editorRef.current?.clear();
-    }, []);
+    }, [clearLocalDraft]);
 
     const persistNote = useCallback(
       async ({
@@ -312,10 +417,11 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
         if (tagsChanged) {
           setRelatedLoading(true);
         }
+        clearLocalDraft();
         await onSaved();
         return meta;
       },
-      [onSaved, resolveCurrentTags],
+      [clearLocalDraft, onSaved, resolveCurrentTags],
     );
 
     const saveIfNeeded = useCallback(
@@ -583,6 +689,126 @@ export const NotePanel = forwardRef<PanelHandle, NotePanelProps>(
     );
 
     // Load initial note on mount
+    useEffect(() => {
+      let cancelled = false;
+
+      const restoreDraft = async () => {
+        try {
+          if (initialLoadDone.current || initialNoteId) {
+            return;
+          }
+
+          const own = readDraft(panelDraftKey);
+          const latest = allowGlobalDraftRestore ? readDraft(DRAFT_LATEST_KEY) : null;
+          const candidates = [own, latest]
+            .filter((draft): draft is LocalDraft => !!draft)
+            .filter(isDraftFresh)
+            .filter(isDraftMeaningful)
+            .sort((a, b) => b.updatedAt - a.updatedAt);
+
+          const draft = candidates[0];
+          if (!draft || cancelled) {
+            return;
+          }
+
+          const hasLocalInput = () =>
+            contentRef.current.trim().length > 0 ||
+            titleRef.current.trim().length > 0 ||
+            tagsRef.current.length > 0;
+
+          if (hasLocalInput()) {
+            return;
+          }
+
+          if (draft.noteId) {
+            try {
+              const note = await getNote(draft.noteId);
+              if (cancelled) return;
+              setLoadedNoteId(note.id);
+              loadedNoteIdRef.current = note.id;
+              savedContentRef.current = note.content;
+              savedTitleRef.current = note.title;
+              savedTagsRef.current = note.tags;
+              setPinned(isPinnedNotePath(note.path));
+            } catch {
+              if (cancelled) return;
+              setLoadedNoteId(null);
+              loadedNoteIdRef.current = null;
+              savedContentRef.current = "";
+              savedTitleRef.current = "";
+              savedTagsRef.current = [];
+              setPinned(false);
+            }
+          } else {
+            setLoadedNoteId(null);
+            loadedNoteIdRef.current = null;
+            savedContentRef.current = "";
+            savedTitleRef.current = "";
+            savedTagsRef.current = [];
+            setPinned(false);
+          }
+
+          if (cancelled || hasLocalInput()) {
+            return;
+          }
+
+          setContent(draft.content);
+          contentRef.current = draft.content;
+          setTitle(draft.title);
+          titleRef.current = draft.title;
+          titleManuallyEditedRef.current = draft.title.trim().length > 0;
+          setTags(draft.tags);
+          tagsRef.current = draft.tags;
+          setShowPinnedList(false);
+          setUserModified(true);
+          initialLoadDone.current = true;
+        } finally {
+          if (!cancelled) {
+            draftRestoreCheckedRef.current = true;
+          }
+        }
+      };
+
+      void restoreDraft();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [allowGlobalDraftRestore, initialNoteId, panelDraftKey]);
+
+    useEffect(() => {
+      if (!draftRestoreCheckedRef.current) return;
+
+      const draftSnapshot = {
+        title: titleRef.current,
+        content: contentRef.current,
+        tags: tagsRef.current,
+      };
+      const hasUnsaved = hasUnsavedChanges(false);
+
+      if (!hasUnsaved || !isDraftMeaningful(draftSnapshot)) {
+        clearLocalDraft();
+        return;
+      }
+
+      const timer = window.setTimeout(() => {
+        persistLocalDraft();
+      }, DRAFT_AUTOSAVE_DELAY_MS);
+
+      return () => {
+        window.clearTimeout(timer);
+      };
+    }, [
+      clearLocalDraft,
+      content,
+      hasUnsavedChanges,
+      loadedNoteId,
+      persistLocalDraft,
+      tags,
+      title,
+      userModified,
+    ]);
+
     useEffect(() => {
       if (initialNoteId && !initialLoadDone.current) {
         initialLoadDone.current = true;

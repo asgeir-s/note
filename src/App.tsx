@@ -1584,6 +1584,8 @@ export default function App() {
             >
               <NotePanel
                 ref={setPanelRef(panel.id)}
+                draftStorageKey={`panel-${panel.id}`}
+                allowGlobalDraftRestore={index === 0}
                 recentNotes={recentNotes}
                 pinnedNotes={pinnedNotes}
                 allTags={allTags}
