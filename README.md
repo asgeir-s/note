@@ -6,6 +6,20 @@ A zero-friction personal knowledge base and note capture app. Keep notes lightwe
 
 Capture first, organize lightly. Most documents are notes; a small set can be promoted into pinned notes. Structure emerges from tags, links, full-text search, and a minimal `notes/` vs `pinned/` split.
 
+## Features
+
+- Capture notes quickly with a clean, distraction-light writing flow.
+- Keep everyday notes and long-term reference notes clearly separated.
+- Find what you need fast with search, links, and related-note suggestions.
+- Stay organized automatically in the background with minimal manual upkeep.
+- Keep your knowledge base as trusted ground truth under your control.
+- Make your notes easy for AI agents to read and use when needed.
+- Work across multiple side-by-side note panels for better focus.
+- Record meetings and get structured summaries and transcripts.
+- Automatic sync with reliable history and backup.
+- Personalize your workspace with themes.
+- Running locally on your machine for maximum privacy and control.
+
 ## Personal KB + AI Access Model
 
 Lore is designed to be low-maintenance for humans and easy to consume for AI:
