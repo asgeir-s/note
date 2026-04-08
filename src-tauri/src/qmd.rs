@@ -1258,14 +1258,14 @@ mod tests {
 
     #[test]
     fn preferred_path_entries_include_linuxbrew_locations() {
-        let entries = preferred_path_entries("/home/asgeir");
+        let entries = preferred_path_entries("/home/testuser");
 
         assert!(entries
             .iter()
-            .any(|path| path == "/home/asgeir/.linuxbrew/bin"));
+            .any(|path| path == "/home/testuser/.linuxbrew/bin"));
         assert!(entries
             .iter()
-            .any(|path| path == "/home/asgeir/.linuxbrew/sbin"));
+            .any(|path| path == "/home/testuser/.linuxbrew/sbin"));
         assert!(entries
             .iter()
             .any(|path| path == "/home/linuxbrew/.linuxbrew/bin"));
