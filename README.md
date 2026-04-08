@@ -35,6 +35,58 @@ AI access is intentionally read-first:
 - Source notes are treated as ground truth, so AI should not silently auto-edit them.
 - New or changed knowledge should be user-authored, or at minimum explicitly reviewed and validated by the user.
 
+## Getting Started
+
+### For Users
+
+If you just want to install and use Lore:
+
+```bash
+npm run install-app
+```
+
+`install-app` automatically detects your OS (macOS/Linux) and runs the correct installer.
+
+If you also want recording + AI helper features, run the one-time setup for your OS, then install:
+
+```bash
+npm run setup-macos
+# or
+npm run setup-ubuntu
+npm run install-app
+```
+
+### For Developers
+
+Use this path if you want to work on the codebase.
+
+Prerequisites:
+
+- [Rust](https://rustup.rs/) (latest stable)
+- [Node.js](https://nodejs.org/) >= 22
+- [Git](https://git-scm.com/) (for automatic note version history)
+- System dependencies for Tauri v2 (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run in development:
+
+```bash
+cargo tauri dev
+```
+
+Build/install local app bundle:
+
+```bash
+npm run install-app
+```
+
+Your settings (theme, zoom, git remote) are preserved between installs/updates.
+
 ## Tech Stack
 
 - **Runtime:** Tauri v2 (Rust backend, web frontend)
@@ -42,64 +94,6 @@ AI access is intentionally read-first:
 - **Editor:** CodeMirror 6 with markdown WYSIWYG rendering
 - **Search:** qmd (child process) with fallback text search
 - **Language:** TypeScript (strict mode)
-
-## Getting Started
-
-### Prerequisites
-
-- [Rust](https://rustup.rs/) (latest stable)
-- [Node.js](https://nodejs.org/) >= 22
-- [Git](https://git-scm.com/) (for automatic note version history)
-- System dependencies for Tauri v2 (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
-
-### macOS setup (recommended)
-
-Install runtime tools for installed app features:
-
-```bash
-npm run setup-macos
-```
-
-This installs Homebrew Node.js, qmd, ffmpeg, whisper-cpp, ollama, and downloads a whisper model.
-
-### Ubuntu setup (recommended)
-
-Install Linux system/runtime packages for Tauri + app features:
-
-```bash
-npm run setup-ubuntu
-```
-
-### Install dependencies
-
-```bash
-npm install
-```
-
-### Development
-
-```bash
-cargo tauri dev
-```
-
-### Build and install
-
-Build and install for your current OS:
-
-```bash
-npm run install-app
-```
-
-Explicit commands:
-
-```bash
-npm run install-app:macos
-npm run install-app:ubuntu
-```
-
-Your settings (theme, zoom, git remote) are preserved between builds.
-
-To update after making changes, just run the two commands above again.
 
 ## Settings
 
