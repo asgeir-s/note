@@ -1,10 +1,25 @@
 # Lore
 
-A zero-friction personal note capture app. Keep notes lightweight, searchable, and easy to revisit.
+A zero-friction personal knowledge base and note capture app. Keep notes lightweight, searchable, and easy to revisit.
 
 ## Philosophy
 
 Capture first, organize lightly. Most documents are notes; a small set can be promoted into pinned notes. Structure emerges from tags, links, full-text search, and a minimal `notes/` vs `pinned/` split.
+
+## Personal KB + AI Access Model
+
+Lore is designed to be low-maintenance for humans and easy to consume for AI:
+
+- You write notes directly as markdown.
+- The app keeps organization lightweight with `notes/` and `pinned/` collections.
+- QMD background work automatically tags notes and refreshes related-note metadata to keep the knowledge base organized with minimal upkeep.
+
+AI access is intentionally read-first:
+
+- AI agents can search and retrieve knowledge via QMD.
+- This repo includes a QMD access skill in `SKILL.md` for consistent agent behavior.
+- Source notes are treated as ground truth, so AI should not silently auto-edit them.
+- New or changed knowledge should be user-authored, or at minimum explicitly reviewed and validated by the user.
 
 ## Tech Stack
 
